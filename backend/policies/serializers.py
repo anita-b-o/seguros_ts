@@ -18,6 +18,8 @@ from .billing import (
     regenerate_installments,
 )
 
+VEHICLE_OWNER_MISMATCH_ERROR = "El vehículo no pertenece al titular de la póliza."
+
 
 class PolicyVehicleSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
@@ -256,12 +258,7 @@ class PolicySerializer(serializers.ModelSerializer):
         if not start_date:
             raise ValidationError({"start_date": "Definí la fecha de inicio de vigencia."})
 
-        vehicle_ref = data.get("vehicle_id")
-        user = data.get("user") or getattr(self.instance, "user", None)
-        if vehicle_ref and user and vehicle_ref.owner_id != user.id:
-            raise ValidationError(
-                {"vehicle_id": "El vehículo debe pertenecer al titular de la póliza."}
-            )
+        self._validate_vehicle_owner_payload(data)
         return data
 
     def create(self, validated_data):
@@ -328,11 +325,46 @@ class PolicySerializer(serializers.ModelSerializer):
                 policy.vehicle = vehicle
                 policy.save(update_fields=["vehicle"])
 
+    def _validate_vehicle_owner_payload(self, data):
+        vehicle = self._get_candidate_vehicle(data)
+        if not vehicle:
+            return
+        user = self._get_candidate_user(data)
+        if not user:
+            return
+        if vehicle.owner_id != user.id:
+            raise ValidationError({"vehicle": VEHICLE_OWNER_MISMATCH_ERROR})
+
     def _validate_vehicle_owner(self, policy, vehicle):
-        if policy.user_id and vehicle.owner_id != policy.user_id:
-            raise ValidationError(
-                {"vehicle_id": "El vehículo debe pertenecer al titular de la póliza."}
-            )
+        user_id = policy.user_id
+        if not user_id:
+            user_id = self._request_user_id()
+        if not user_id:
+            return
+        if vehicle.owner_id != user_id:
+            raise ValidationError({"vehicle": VEHICLE_OWNER_MISMATCH_ERROR})
+
+    def _get_candidate_vehicle(self, data):
+        candidate = data.get("vehicle_id") or data.get("vehicle")
+        if isinstance(candidate, Vehicle):
+            return candidate
+        return getattr(self.instance, "vehicle", None)
+
+    def _get_candidate_user(self, data):
+        user = data.get("user") or getattr(self.instance, "user", None)
+        if user:
+            return user
+        return self._request_user()
+
+    def _request_user(self):
+        request = self.context.get("request")
+        if request and getattr(request, "user", None) and request.user.is_authenticated:
+            return request.user
+        return None
+
+    def _request_user_id(self):
+        user = self._request_user()
+        return user.id if user else None
 
     def _resolve_or_create_vehicle(self, policy, vehicle_data):
         if not policy.user_id:

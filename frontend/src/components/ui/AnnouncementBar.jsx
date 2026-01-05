@@ -12,7 +12,7 @@ export default function AnnouncementBar() {
   useEffect(()=>{
     (async ()=>{
       try {
-      const { data } = await apiPublic.get("/common/announcements");
+      const { data } = await apiPublic.get("/common/announcements/");
         setItems(Array.isArray(data) ? data : []);
       } catch {}
     })();

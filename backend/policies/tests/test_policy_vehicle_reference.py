@@ -89,7 +89,7 @@ class PolicyVehicleReferenceTests(TestCase):
         data["vehicle_id"] = self.foreign_vehicle.id
         serializer = PolicySerializer(data=data)
         self.assertFalse(serializer.is_valid())
-        self.assertIn("vehicle_id", serializer.errors)
+        self.assertIn("vehicle", serializer.errors)
 
     def test_serializer_creates_vehicle_from_plate(self):
         data = self._policy_data()

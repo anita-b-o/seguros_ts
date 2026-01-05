@@ -45,11 +45,28 @@ function stripTrailingSlash(s = "") {
 }
 const API_BASE = (() => {
   const env = import.meta.env;
-  const base =
-    env.VITE_API_URL ??
-    env.VITE_API_BASE ??
-    (env.DEV ? "/api" : "http://localhost:8000/api");
-  return stripTrailingSlash(base); // ← evita /api/ doble
+  const ENV_BASE =
+    env.VITE_API_BASE_URL?.trim() ??
+    env.VITE_API_URL?.trim() ??
+    env.VITE_API_BASE?.trim();
+  const DEFAULT_DEV_BASE = "http://127.0.0.1:8000/api";
+  const DEFAULT_PROD_BASE = "/api";
+  const isLocalhostUrl = (value) => /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(value);
+
+  if (ENV_BASE) {
+    if (!env.DEV && isLocalhostUrl(ENV_BASE)) {
+      throw new Error(
+        "VITE_API_BASE_URL can't point to localhost when building for production."
+      );
+    }
+    return stripTrailingSlash(ENV_BASE);
+  }
+
+  if (env.DEV) {
+    return stripTrailingSlash(DEFAULT_DEV_BASE);
+  }
+
+  return stripTrailingSlash(DEFAULT_PROD_BASE);
 })();
 
 const LOGIN_PATH = "/login";

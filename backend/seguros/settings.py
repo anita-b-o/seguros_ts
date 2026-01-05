@@ -1,9 +1,13 @@
+import logging
 import os
 import sys
 from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
+from django.core.cache import caches
 from django.core.exceptions import ImproperlyConfigured
+
+from payments.webhook_config import ensure_mp_webhook_configuration
 
 # === BASE DIR ===
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -54,6 +58,46 @@ def build_cache_settings(redis_url, debug):
     )
 
 
+logger = logging.getLogger(__name__)
+
+
+def ensure_redis_cache_configuration(debug, caches_config, redis_url, running_tests=False):
+    redis_backend = "redis" in caches_config.get("default", {}).get("BACKEND", "").lower()
+    if debug or running_tests:
+        if not redis_backend:
+            logger.warning(
+                "cache_non_redis",
+                extra={"detail": "Cache backend is not Redis in DEBUG mode."},
+            )
+        return
+
+    if not redis_url:
+        raise ImproperlyConfigured("Redis cache is required in production for OTP and rate limiting.")
+
+    if not redis_backend:
+        raise ImproperlyConfigured("Redis cache is required in production for OTP and rate limiting.")
+
+
+def ensure_redis_cache_health(debug, running_tests=False):
+    if debug or running_tests:
+        return
+    health_cache = caches["default"]
+    key = "_redis_healthcheck"
+    try:
+        health_cache.set(key, "ok", timeout=5)
+        if health_cache.get(key) != "ok":
+            raise ImproperlyConfigured("Redis cache is required in production for OTP and rate limiting.")
+    except ImproperlyConfigured:
+        raise
+    except Exception as exc:
+        logger.critical(
+            "redis_cache_unavailable",
+            extra={"error": str(exc)},
+        )
+        raise ImproperlyConfigured("Redis cache is required in production for OTP and rate limiting.") from exc
+    logger.info("redis_cache_ready")
+
+
 # === CORE ===
 DEPLOYMENT_ENV = (
     os.getenv("DJANGO_ENV")
@@ -77,8 +121,22 @@ if not SECRET_KEY:
         SECRET_KEY = "dev-secret-key-change-me"
     else:
         raise ImproperlyConfigured(
-            "DJANGO_SECRET_KEY is required when DEBUG=False."
-        )
+        "DJANGO_SECRET_KEY is required when DEBUG=False."
+    )
+
+SERVE_MEDIA_FILES = _bool(os.getenv("SERVE_MEDIA_FILES"), DEBUG)
+
+MP_WEBHOOK_SECRET = (os.getenv("MP_WEBHOOK_SECRET") or "").strip()
+MP_ALLOW_WEBHOOK_NO_SECRET = _bool(os.getenv("MP_ALLOW_WEBHOOK_NO_SECRET"), False)
+MP_ALLOW_FAKE_PREFERENCES = _bool(os.getenv("MP_ALLOW_FAKE_PREFERENCES"), True)
+
+ensure_mp_webhook_configuration(
+    DEBUG,
+    MP_WEBHOOK_SECRET,
+    MP_ALLOW_WEBHOOK_NO_SECRET,
+    MP_ALLOW_FAKE_PREFERENCES,
+    running_tests=RUNNING_TESTS,
+)
 
 # Hosts permitidos
 hosts_env = os.getenv("DJANGO_ALLOWED_HOSTS") or os.getenv("ALLOWED_HOSTS")
@@ -91,6 +149,8 @@ else:
         raise ImproperlyConfigured(
             "DJANGO_ALLOWED_HOSTS is required when DEBUG=False."
         )
+
+AUTH_USER_MODEL = "accounts.User"
 
 # === INSTALLED APPS ===
 INSTALLED_APPS = [
@@ -109,14 +169,13 @@ INSTALLED_APPS = [
     "corsheaders",
 
     # Apps locales
-    "common",
-    "accounts",
-    "vehicles",
-    "products",
-    "policies",
-    "payments",
-    "quotes",
-    "core",
+    "common.apps.CommonConfig",
+    "accounts.apps.AccountsConfig",
+    "vehicles.apps.VehiclesConfig",
+    "products.apps.ProductsConfig",
+    "policies.apps.PoliciesConfig",
+    "payments.apps.PaymentsConfig",
+    "quotes.apps.QuotesConfig",
 ]
 
 # === MIDDLEWARE ===
@@ -218,6 +277,14 @@ else:
 # === CACHE ===
 CACHES = build_cache_settings(REDIS_URL, DEBUG)
 
+ensure_redis_cache_configuration(
+    DEBUG,
+    CACHES,
+    REDIS_URL,
+    running_tests=RUNNING_TESTS,
+)
+ensure_redis_cache_health(DEBUG, running_tests=RUNNING_TESTS)
+
 # === OTP / RATE LIMIT ===
 OTP_PEPPER = os.getenv("OTP_PEPPER")
 OTP_TIMEOUT_SECONDS = int(os.getenv("OTP_TIMEOUT_SECONDS", "600"))
@@ -229,7 +296,6 @@ OTP_RATE_LIMIT_VERIFY_WINDOW = int(os.getenv("OTP_RATE_LIMIT_VERIFY_WINDOW", "60
 
 
 # === AUTH ===
-AUTH_USER_MODEL = "accounts.User"
 
 
 # === DRF / JWT ===

@@ -78,6 +78,56 @@ def _normalize_rate_identifier(value: str) -> str:
     return normalized or "unknown"
 
 
+class CacheUnavailable(Exception):
+    """Raised when the shared cache cannot be used for OTP/rate limiting."""
+
+
+def _cache_failure(operation, exc):
+    logger.critical(
+        "cache_unavailable",
+        extra={"cache_op": operation},
+    )
+    raise CacheUnavailable from exc
+
+
+def _cache_get_safe(key, default=None):
+    try:
+        return cache.get(key, default)
+    except Exception as exc:
+        _cache_failure("cache_get", exc)
+
+
+def _cache_set_safe(key, value, timeout=None):
+    try:
+        return cache.set(key, value, timeout=timeout)
+    except Exception as exc:
+        _cache_failure("cache_set", exc)
+
+
+def _cache_add_safe(key, value, timeout=None):
+    try:
+        return cache.add(key, value, timeout=timeout)
+    except Exception as exc:
+        _cache_failure("cache_add", exc)
+
+
+def _cache_delete_safe(key):
+    try:
+        return cache.delete(key)
+    except Exception as exc:
+        _cache_failure("cache_delete", exc)
+
+
+def _cache_unavailable_response():
+    return Response(
+        {
+            "detail": "Servicio temporalmente no disponible. Intentá nuevamente en unos minutos.",
+            "require_otp": True,
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 def _get_client_ip(request):
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
     if forwarded:
@@ -220,7 +270,7 @@ def _send_onboarding(user, request=None, *, send_otp: bool = True):
     if send_otp:
         otp = generate_otp()
         payload = build_otp_payload(otp)
-        cache.set(f"onboarding_otp:{user.id}", payload, timeout=settings.OTP_TIMEOUT_SECONDS)
+        _cache_set_safe(f"onboarding_otp:{user.id}", payload, timeout=settings.OTP_TIMEOUT_SECONDS)
 
     # Email con link + OTP
     if user.email:
@@ -259,13 +309,13 @@ def _send_onboarding(user, request=None, *, send_otp: bool = True):
 
 
 def _increment_rate_counter(rate_key, cooldown):
-    cache.add(rate_key, 0, timeout=cooldown)
+    _cache_add_safe(rate_key, 0, timeout=cooldown)
     try:
         return cache.incr(rate_key)
     except (ValueError, NotImplementedError):
         if not settings.DEBUG:
             raise
-        current = cache.get(rate_key, 0)
+        current = _cache_get_safe(rate_key, 0)
         next_value = current + 1
         ttl = None
         ttl_func = getattr(cache, "ttl", None)
@@ -275,8 +325,10 @@ def _increment_rate_counter(rate_key, cooldown):
             except Exception:
                 ttl = None
         timeout = ttl if ttl and ttl > 0 else cooldown
-        cache.set(rate_key, next_value, timeout=timeout)
+        _cache_set_safe(rate_key, next_value, timeout=timeout)
         return next_value
+    except Exception as exc:
+        _cache_failure("cache_incr", exc)
 
 
 class EmailLoginView(PublicEndpointMixin, APIView):
@@ -310,89 +362,92 @@ class EmailLoginView(PublicEndpointMixin, APIView):
 
         # Doble verificación para staff/admin
         if user.is_staff:
-            cache_key = f"admin_otp:{user.id}"
-            payload = cache.get(cache_key)
-            rate_identifier = _build_rate_identifier(request, user=user, email=email)
-            send_limit = settings.OTP_RATE_LIMIT_SEND_COUNT
-            send_window = settings.OTP_RATE_LIMIT_SEND_WINDOW
-            verify_limit = settings.OTP_RATE_LIMIT_VERIFY_COUNT
-            verify_window = settings.OTP_RATE_LIMIT_VERIFY_WINDOW
-            max_attempts = settings.OTP_VERIFY_MAX_ATTEMPTS
-            otp_window = settings.OTP_TIMEOUT_SECONDS
+            try:
+                cache_key = f"admin_otp:{user.id}"
+                payload = _cache_get_safe(cache_key)
+                rate_identifier = _build_rate_identifier(request, user=user, email=email)
+                send_limit = settings.OTP_RATE_LIMIT_SEND_COUNT
+                send_window = settings.OTP_RATE_LIMIT_SEND_WINDOW
+                verify_limit = settings.OTP_RATE_LIMIT_VERIFY_COUNT
+                verify_window = settings.OTP_RATE_LIMIT_VERIFY_WINDOW
+                max_attempts = settings.OTP_VERIFY_MAX_ATTEMPTS
+                otp_window = settings.OTP_TIMEOUT_SECONDS
 
-            if otp:
-                allowed, _ = _rate_limit_check(
-                    "otp_verify",
-                    rate_identifier,
-                    verify_limit,
-                    verify_window,
-                )
-                if not allowed:
-                    return Response(
-                        {"detail": "Demasiados intentos. Esperá unos minutos e intentá nuevamente.", "require_otp": True},
-                        status=status.HTTP_429_TOO_MANY_REQUESTS,
+                if otp:
+                    allowed, _ = _rate_limit_check(
+                        "otp_verify",
+                        rate_identifier,
+                        verify_limit,
+                        verify_window,
                     )
-                has_payload = bool(payload)
-                valid = False
-                if has_payload:
-                    candidate_hash = otp_hash(otp, payload["salt"])
-                    valid = constant_time_compare(payload["hash"], candidate_hash)
-                if not valid:
-                    if payload:
-                        attempts = payload.get("attempts", 0) + 1
-                        remaining_ttl = get_payload_remaining_ttl(payload)
-                        if remaining_ttl <= 0:
-                            cache.delete(cache_key)
-                        else:
-                            payload["attempts"] = attempts
-                            cache.set(cache_key, payload, timeout=max(remaining_ttl, 1))
-                        if attempts >= max_attempts:
-                            cache.delete(cache_key)
-                            return Response(
-                                {
-                                    "detail": "Demasiados intentos. Esperá unos minutos e intentá nuevamente.",
-                                    "require_otp": True,
-                                },
-                                status=status.HTTP_429_TOO_MANY_REQUESTS,
-                            )
+                    if not allowed:
+                        return Response(
+                            {"detail": "Demasiados intentos. Esperá unos minutos e intentá nuevamente.", "require_otp": True},
+                            status=status.HTTP_429_TOO_MANY_REQUESTS,
+                        )
+                    has_payload = bool(payload)
+                    valid = False
+                    if has_payload:
+                        candidate_hash = otp_hash(otp, payload["salt"])
+                        valid = constant_time_compare(payload["hash"], candidate_hash)
+                    if not valid:
+                        if payload:
+                            attempts = payload.get("attempts", 0) + 1
+                            remaining_ttl = get_payload_remaining_ttl(payload)
+                            if remaining_ttl <= 0:
+                                _cache_delete_safe(cache_key)
+                            else:
+                                payload["attempts"] = attempts
+                                _cache_set_safe(cache_key, payload, timeout=max(remaining_ttl, 1))
+                            if attempts >= max_attempts:
+                                _cache_delete_safe(cache_key)
+                                return Response(
+                                    {
+                                        "detail": "Demasiados intentos. Esperá unos minutos e intentá nuevamente.",
+                                        "require_otp": True,
+                                    },
+                                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                                )
+                        return Response(
+                            {
+                                "detail": "Código inválido o expirado.",
+                                "require_otp": True,
+                                "otp_sent_to": _mask_email(email),
+                                "otp_ttl_seconds": otp_window,
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    _cache_delete_safe(cache_key)
+                else:
+                    allowed, _ = _rate_limit_check(
+                        "otp_send",
+                        rate_identifier,
+                        send_limit,
+                        send_window,
+                    )
+                    if not allowed:
+                        return Response(
+                            {
+                                "detail": "Demasiados envíos de código. Esperá unos minutos e intentá nuevamente.",
+                                "require_otp": True,
+                            },
+                            status=status.HTTP_429_TOO_MANY_REQUESTS,
+                        )
+                    code = generate_otp()
+                    payload = build_otp_payload(code)
+                    _cache_set_safe(cache_key, payload, timeout=otp_window)
+                    _send_email_code(email, code)
                     return Response(
                         {
-                            "detail": "Código inválido o expirado.",
+                            "detail": "Te enviamos un código a tu email. Ingresalo para continuar.",
                             "require_otp": True,
                             "otp_sent_to": _mask_email(email),
                             "otp_ttl_seconds": otp_window,
                         },
-                        status=status.HTTP_400_BAD_REQUEST,
+                        status=status.HTTP_202_ACCEPTED,
                     )
-                cache.delete(cache_key)
-            else:
-                allowed, _ = _rate_limit_check(
-                    "otp_send",
-                    rate_identifier,
-                    send_limit,
-                    send_window,
-                )
-                if not allowed:
-                    return Response(
-                        {
-                            "detail": "Demasiados envíos de código. Esperá unos minutos e intentá nuevamente.",
-                            "require_otp": True,
-                        },
-                        status=status.HTTP_429_TOO_MANY_REQUESTS,
-                    )
-                code = generate_otp()
-                payload = build_otp_payload(code)
-                cache.set(cache_key, payload, timeout=otp_window)
-                _send_email_code(email, code)
-                return Response(
-                    {
-                        "detail": "Te enviamos un código a tu email. Ingresalo para continuar.",
-                        "require_otp": True,
-                        "otp_sent_to": _mask_email(email),
-                        "otp_ttl_seconds": otp_window,
-                    },
-                    status=status.HTTP_202_ACCEPTED,
-                )
+            except CacheUnavailable:
+                return _cache_unavailable_response()
 
         refresh = RefreshToken.for_user(user)
         data = {
@@ -729,21 +784,23 @@ class ResendOnboardingView(APIView):
             email=user.email,
             phone=(getattr(user, "phone", "") or ""),
         )
-        allowed, _ = _rate_limit_check(
-            "otp_send",
-            identifier,
-            settings.OTP_RATE_LIMIT_SEND_COUNT,
-            settings.OTP_RATE_LIMIT_SEND_WINDOW,
-        )
-        if not allowed:
-            return Response(
-                {
-                    "detail": "Demasiados envíos de código. Esperá unos minutos e intentá nuevamente.",
-                },
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
         try:
+            allowed, _ = _rate_limit_check(
+                "otp_send",
+                identifier,
+                settings.OTP_RATE_LIMIT_SEND_COUNT,
+                settings.OTP_RATE_LIMIT_SEND_WINDOW,
+            )
+            if not allowed:
+                return Response(
+                    {
+                        "detail": "Demasiados envíos de código. Esperá unos minutos e intentá nuevamente.",
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
             otp = _send_onboarding(user, request=request, send_otp=True)
+        except CacheUnavailable:
+            return _cache_unavailable_response()
         except ImproperlyConfigured as exc:
             logger.error("resend_onboarding_missing_origin", extra={"user_id": user.id, "error": str(exc)})
             return Response(

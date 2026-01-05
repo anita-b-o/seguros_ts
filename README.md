@@ -142,6 +142,12 @@ STRICT=1 npm run verify:endpoints
 
 La variante `STRICT=1` falla si el código usa interpolaciones dinámicas (p. ej. `` `/policies/${id}` ``) sin documentarlas; el modo sin `STRICT` solo advierte. Este paso se usa para que `frontend_backend_contract.md` siga siendo la fuente de verdad.
 
+## Frontend API base URL
+
+- Durante el desarrollo local (`import.meta.env.DEV === true`), el frontend busca `VITE_API_BASE_URL`, `VITE_API_URL` o `VITE_API_BASE` (en ese orden). Si no encuentra ninguna, usa `http://127.0.0.1:8000/api`, lo que deja trabajar con un backend local sin cambiar la configuración.
+- En producción (`import.meta.env.DEV === false`), el valor por defecto es la misma-origin `/api` y nunca salta hacia `localhost` o `127.0.0.1`. Si necesitás pegar a un backend externo podes definir `VITE_API_BASE_URL=https://api.tu-dominio.com/api`.
+- Si alguien setea `VITE_API_BASE_URL` a `localhost`/`127.0.0.1` y construye para producción, la compilación falla con un mensaje claro: no permitimos que el bundle apunte a un backend local en ese entorno.
+
 ## Flujo operativo (cotización manual → póliza → asociación)
 1. El cliente completa un formulario de cotización (información del vehículo + fotos) y lo envía al WhatsApp del negocio; no hay endpoint público automatizado para inspecciones.
 2. El responsable (admin) revisa ese formulario externamente y, desde el panel de administración, crea la póliza correspondiente, establece el monto y comparte con el cliente el **número de póliza** asignado.

@@ -3,6 +3,7 @@ from django.db.models import Prefetch, Q
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from .access import policy_scope_queryset
 from .models import Policy, PolicyVehicle
 from .serializers import (
     PolicySerializer,
@@ -123,7 +124,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
     refresh_on_read_default = _env_bool(os.getenv("POLICY_REFRESH_ON_READ"))
 
     def get_queryset(self):
-        return (
+        base_qs = (
             Policy.objects.select_related("user", "product", "vehicle")
             .prefetch_related(
                 Prefetch("legacy_vehicle", queryset=PolicyVehicle.objects.all()),
@@ -131,6 +132,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
             )
             .order_by("-id")
         )
+        return policy_scope_queryset(base_qs, self.request)
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()

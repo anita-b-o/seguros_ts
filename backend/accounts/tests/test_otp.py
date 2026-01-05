@@ -154,6 +154,15 @@ class OTPTests(APITestCase):
         )
         self.assertEqual(third.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
+    @override_settings(DEBUG=False)
+    def test_otp_rate_limit_cache_failure_returns_503(self):
+        with patch(
+            "accounts.auth_views._increment_rate_counter",
+            side_effect=auth_views.CacheUnavailable("cache down"),
+        ):
+            response = self.client.post(self.login_url, {"email": self.staff.email, "password": self.password})
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
     @override_settings(DEBUG=False, FRONTEND_ORIGINS=[], FRONTEND_ORIGIN="")
     def test_reset_link_requires_frontend_origin_in_prod(self):
         user = User.objects.create_user(

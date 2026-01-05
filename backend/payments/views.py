@@ -30,9 +30,9 @@ from .utils import generate_receipt_pdf
 
 from datetime import date
 from django.conf import settings
-from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.crypto import get_random_string, constant_time_compare
+from policies.access import get_scoped_policy_or_404
 
 def _env_bool(val):
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on") if val is not None else False
@@ -43,18 +43,15 @@ logger = logging.getLogger(__name__)
 
 def _authorize_mp_webhook(request):
     """
-    Valida la firma del webhook usando un secreto compartido (env MP_WEBHOOK_SECRET).
+    Valida la firma del webhook usando un secreto compartido.
     Acepta:
       - Header `X-Mp-Signature: <token>`
       - Authorization: Bearer <token>
     """
-    secret = (os.getenv("MP_WEBHOOK_SECRET") or "").strip()
-
-    require_secret = not settings.DEBUG
-    if os.getenv("MP_REQUIRE_WEBHOOK_SECRET") is not None:
-        require_secret = _env_bool(os.getenv("MP_REQUIRE_WEBHOOK_SECRET"))
-
-    allow_no_secret = _env_bool(os.getenv("MP_ALLOW_WEBHOOK_NO_SECRET"))
+    secret = (getattr(settings, "MP_WEBHOOK_SECRET", "") or "").strip()
+    allow_no_secret = (
+        settings.DEBUG and getattr(settings, "MP_ALLOW_WEBHOOK_NO_SECRET", False)
+    )
 
     def allow(detail=None):
         return True, detail, 200
@@ -63,36 +60,33 @@ def _authorize_mp_webhook(request):
         return False, detail, status
 
     if not secret:
-        if require_secret:
-            return reject(
-                "MP_WEBHOOK_SECRET requerido (definí la variable o habilitá MP_ALLOW_WEBHOOK_NO_SECRET explícitamente).",
-                503,
+        if allow_no_secret:
+            logger.warning(
+                "mp_webhook_no_secret_debug",
+                extra={"detail": "MP_WEBHOOK_SECRET ausente; se aceptó en modo debug."},
             )
-        if not settings.DEBUG:
-            return reject(
-                "MP_WEBHOOK_SECRET requerido (definí la variable o habilitá MP_ALLOW_WEBHOOK_NO_SECRET explícitamente).",
-                503,
-            )
-        if not allow_no_secret:
-            return reject(
-                "MP_WEBHOOK_SECRET requerido (definí la variable o habilitá MP_ALLOW_WEBHOOK_NO_SECRET explícitamente).",
-                503,
-            )
-        logger.warning(
-            "MP_WEBHOOK_SECRET no configurado. Aceptando webhook sin firma porque MP_ALLOW_WEBHOOK_NO_SECRET está activo."
+            return allow("MP_WEBHOOK_SECRET ausente; se aceptó sin validar firma.")
+        detail = "MP_WEBHOOK_SECRET is required when DEBUG=False"
+        logger.critical(
+            "mp_webhook_misconfigured",
+            extra={"detail": detail},
         )
-        return allow("MP_WEBHOOK_SECRET ausente; se aceptó sin validar firma.")
+        return reject(detail, 500)
 
-    bearer = (request.headers.get("Authorization") or "").replace("Bearer", "").strip()
-    incoming = (request.headers.get("X-Mp-Signature") or bearer or "").strip()
+    signature = (request.headers.get("X-Mp-Signature") or "").strip()
+    authorization = (request.headers.get("Authorization") or "").strip()
+    bearer = ""
+    if authorization.lower().startswith("bearer"):
+        bearer = authorization[6:].strip()
 
-    if not incoming:
-        return reject("Falta firma del webhook", 403)
+    incoming_tokens = [token for token in (signature, bearer) if token]
+    if not incoming_tokens:
+        return reject("Se requiere Authorization Bearer o X-Mp-Signature.", 403)
 
-    if not constant_time_compare(incoming, secret):
-        return reject("Firma inválida", 403)
+    if any(constant_time_compare(token, secret) for token in incoming_tokens):
+        return allow()
 
-    return allow()
+    return reject("Firma inválida", 403)
 
 
 
@@ -121,8 +115,7 @@ def _mp_fake_payments_allowed():
     """
     if not settings.DEBUG:
         return False
-    # En DEBUG permitimos si la variable no existe o está en true.
-    return _env_bool(os.getenv("MP_ALLOW_FAKE_PREFERENCES") or "true")
+    return getattr(settings, "MP_ALLOW_FAKE_PREFERENCES", True)
 
 
 def _mp_notification_url(request):
@@ -142,6 +135,13 @@ def _normalize_payload(payload):
         return dict(payload)
     except Exception:
         return {}
+
+
+def _webhook_request_context(request):
+    return {
+        "remote_addr": request.META.get("REMOTE_ADDR"),
+        "user_agent": request.headers.get("User-Agent"),
+    }
 
 
 def _map_status_to_state(status_norm):
@@ -473,10 +473,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='policies/(?P<policy_id>[^/.]+)/create_preference')
     def create_preference(self, request, policy_id=None):
-        policy = get_object_or_404(Policy, id=policy_id)
+        policy = get_scoped_policy_or_404(request, id=policy_id)
         user = request.user
-        if (not user.is_staff) and (policy.user_id != user.id):
-            return Response({'detail':'No autorizado'}, status=403)
 
         if policy.status in ADMIN_MANAGED_STATUSES:
             logger.warning(
@@ -710,10 +708,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
         policy_id = request.query_params.get("policy_id")
         if not policy_id:
             return Response({"detail": "policy_id requerido"}, status=400)
-        policy = get_object_or_404(Policy, id=policy_id)
-        user = request.user
-        if (not user.is_staff) and (policy.user_id != user.id):
-            return Response({'detail':'No autorizado'}, status=403)
+        policy = get_scoped_policy_or_404(request, id=policy_id)
         # Datos mínimos requeridos para generar cargos
         if not getattr(policy, "start_date", None):
             return Response({"detail": "La póliza no tiene fecha de inicio. Cargá start_date para habilitar los pagos."}, status=400)
@@ -766,7 +761,13 @@ def mp_webhook(request):
     else:
         ok, err, status_code = False, "Respuesta inválida de _authorize_mp_webhook", 500
     if not ok:
-        logger.error("mp_webhook_rejected", extra={"reason": err})
+        logger.warning(
+            "mp_webhook_rejected",
+            extra={
+                "reason": err,
+                **_webhook_request_context(request),
+            },
+        )
         return Response({'detail': err}, status=status_code)
 
     # Notificación clásica (propia) o oficial de MP
@@ -777,6 +778,18 @@ def mp_webhook(request):
     pid = payload.get('payment_id') or payload.get("external_reference")
     preference_id = payload.get('mp_preference_id') or payload.get("preference_id")
     amount_raw = payload.get('amount')
+    event_id = payload.get("id") or payload.get("event_id")
+    event_type = payload.get("type") or payload.get("topic")
+    event_extra = {
+        "event_id": event_id,
+        "event_type": event_type,
+        "mp_payment_id": mp_payment_id,
+        "status": status_str,
+    }
+    logger.info(
+        "mp_webhook_authorized",
+        extra={"event": {k: v for k, v in event_extra.items() if v}},
+    )
 
     # Si viene id de MP y hay token, consultamos a MP para validar
     payment_info = None
@@ -811,7 +824,7 @@ def mp_webhook(request):
 @api_view(['POST'])
 @permission_classes([permissions.IsAdminUser])
 def manual_payment(request, policy_id=None):
-    policy = get_object_or_404(Policy, id=policy_id)
+    policy = get_scoped_policy_or_404(request, id=policy_id)
     settings_obj = AppSettings.get_solo()
     today = date.today()
     cycle = current_payment_cycle(policy, settings_obj) or {}

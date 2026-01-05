@@ -65,7 +65,7 @@ urlpatterns = [
 
 # === Archivos estáticos y media ===
 # En entornos no DEBUG solo si el deploy lo habilita explícitamente (ver settings.SERVE_MEDIA_FILES)
-if settings.SERVE_MEDIA_FILES:
+if getattr(settings, "SERVE_MEDIA_FILES", False):
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
