@@ -111,7 +111,7 @@ DEPLOYMENT_ENV = DEPLOYMENT_ENV.strip().lower()
 RUNNING_TESTS = "test" in " ".join(sys.argv)
 DEBUG = _bool(os.getenv("DJANGO_DEBUG") or os.getenv("DEBUG"), False)
 
-# API policy: no forced redirects (APPEND_SLASH=False) while routers expose endpoints with optional trailing slashes via trailing_slash="/?"
+# API policy: no forced redirects (APPEND_SLASH=False); routers expose endpoints without trailing slash and we duplicate paths where needed.
 APPEND_SLASH = False
 
 if DEBUG and DEPLOYMENT_ENV in ("prod", "production"):

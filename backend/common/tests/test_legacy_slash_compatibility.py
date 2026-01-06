@@ -82,6 +82,25 @@ class LegacySlashCompatibilityTests(APITestCase):
             self.assertEqual(allowed.status_code, status.HTTP_200_OK)
             self.assertIn("results", allowed.data)
 
+    def test_common_admin_settings_accepts_slash_variants(self):
+        base = "/api/common/admin/settings"
+        for url in self._slash_variants(base):
+            forbidden = self.client.get(url)
+            self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+            allowed = self.admin_client.get(url)
+            self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+
+    def test_accounts_users_me_slash_variants_require_auth(self):
+        guest = APIClient()
+        base = "/api/accounts/users/me"
+        for url in self._slash_variants(base):
+            anonymous = guest.get(url)
+            self.assertEqual(anonymous.status_code, status.HTTP_401_UNAUTHORIZED)
+
+            authenticated = self.client.get(url)
+            self.assertEqual(authenticated.status_code, status.HTTP_200_OK)
+
     def test_auth_login_accepts_slash_variants(self):
         guest = APIClient()
         base = "/api/auth/login"

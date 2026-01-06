@@ -2,8 +2,8 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import ContactInfoView, AppSettingsView, AnnouncementViewSet
 
-# Router con trailing slash para ser compatible con /announcements/
-router = DefaultRouter()
+# Router sin trailing slash; agregamos aliases manuales para compatibilidad legacy.
+router = DefaultRouter(trailing_slash=False)
 router.register(r"announcements", AnnouncementViewSet, basename="announcements")
 
 urlpatterns = [
