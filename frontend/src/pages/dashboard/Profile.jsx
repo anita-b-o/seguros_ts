@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/api";
+import { USERS_ME } from "@/api/endpoints";
 import useAuth from "@/hooks/useAuth";
 import LogoutButton from "@/components/auth/LogoutButton";
 import "../../styles/profile.css";
@@ -24,7 +25,7 @@ export default function Profile() {
     let mounted = true;
     (async () => {
       try {
-        const { data } = await api.get("/accounts/users/me");
+        const { data } = await api.get(USERS_ME);
         if (!mounted) return;
         setForm({
           first_name: data.first_name || "",
@@ -69,7 +70,7 @@ export default function Profile() {
     setError("");
     try {
       const payload = { ...form, birth_date: form.birth_date || null };
-      const { data } = await api.put("/accounts/users/me", payload);
+      const { data } = await api.put(USERS_ME, payload);
       setSession({ user: { ...user, ...data } });
       setSaved(true);
     } catch (err) {

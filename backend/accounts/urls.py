@@ -27,6 +27,11 @@ urlpatterns = [
         UserViewSet.as_view({'get': 'me', 'patch': 'me', 'put': 'me'}),
         name='users-me-slash',
     ),
+    path(
+        'users/me',
+        UserViewSet.as_view({'get': 'me', 'patch': 'me', 'put': 'me'}),
+        name='users-me',
+    ),
     path('jwt/create/', PublicTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('jwt/refresh/', PublicTokenRefreshView.as_view(), name='token_refresh'),
 ]

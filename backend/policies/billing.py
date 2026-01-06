@@ -8,6 +8,7 @@ from django.utils import timezone
 from decimal import Decimal
 from typing import Iterable, List, Optional, Sequence
 
+from audit.helpers import audit_log, snapshot_entity
 from common.models import AppSettings
 from .models import Policy, PolicyInstallment
 
@@ -490,6 +491,15 @@ def update_policy_status_from_installments(
     new_status = "expired" if billing_status == "expired" else "active"
 
     if persist and new_status != current:
+        before_snapshot = snapshot_entity(policy)
         policy.status = new_status
         policy.save(update_fields=["status", "updated_at"])
+        audit_log(
+            action="policy_status_auto_update",
+            entity_type="Policy",
+            entity_id=str(policy.pk),
+            before=before_snapshot,
+            after=snapshot_entity(policy),
+            extra={"billing_status": billing_status},
+        )
     return new_status

@@ -299,7 +299,7 @@ api.interceptors.response.use(
       try {
         // Usamos el MISMO cliente para respetar baseURL y headers
         const { data } = await api.post(
-          "/auth/refresh",
+          "/accounts/jwt/refresh/",
           { refresh: storedRefresh },
           { requiresAuth: false }
         );

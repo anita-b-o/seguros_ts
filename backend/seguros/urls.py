@@ -8,7 +8,7 @@ from django.shortcuts import redirect
 from django_prometheus import exports
 from accounts.auth_views import EmailLoginView, PasswordResetRequestView, PasswordResetConfirmView, RegisterView, LogoutView, GoogleLoginView, GoogleLoginStatusView, ResendOnboardingView
 from accounts.views import deprecated_lookup
-from rest_framework_simplejwt.views import TokenRefreshView
+from accounts.urls import PublicTokenRefreshView
 from .legacy_views import legacy_announcements_list, legacy_announcements_detail
 
 
@@ -41,35 +41,93 @@ urlpatterns = [
 
     # API
     path("api/common/", include("common.urls")),
+    path("api/common", include("common.urls")),
     path("api/users/lookup", deprecated_lookup, name="user-lookup-deprecated"),
+    path("api/users/lookup/", deprecated_lookup, name="user-lookup-deprecated-slash"),
     path("api/accounts/", include("accounts.urls")),
+    path("api/accounts", include("accounts.urls")),
     # Auth alias compatible con el frontend
     path("api/auth/login", EmailLoginView.as_view(), name="auth-login"),
-    path("api/auth/refresh", TokenRefreshView.as_view(), name="auth-refresh"),
+    path("api/auth/login/", EmailLoginView.as_view(), name="auth-login-slash"),
+    path("api/auth/refresh", PublicTokenRefreshView.as_view(), name="auth-refresh"),
+    path("api/auth/refresh/", PublicTokenRefreshView.as_view(), name="auth-refresh-slash"),
     path("api/auth/logout", LogoutView.as_view(), name="auth-logout"),
+    path("api/auth/logout/", LogoutView.as_view(), name="auth-logout-slash"),
     path("api/auth/register", RegisterView.as_view(), name="auth-register"),
+    path("api/auth/register/", RegisterView.as_view(), name="auth-register-slash"),
     path("api/auth/google", GoogleLoginView.as_view(), name="auth-google"),
-    path("api/auth/google/status", GoogleLoginStatusView.as_view(), name="auth-google-status"),
+    path("api/auth/google/", GoogleLoginView.as_view(), name="auth-google-slash"),
+    path(
+        "api/auth/google/status",
+        GoogleLoginStatusView.as_view(),
+        name="auth-google-status",
+    ),
     path(
         "api/auth/google/status/",
         GoogleLoginStatusView.as_view(),
         name="auth-google-status-slash",
     ),
-    path("api/auth/password/reset", PasswordResetRequestView.as_view(), name="auth-password-reset"),
-    path("api/auth/password/reset/confirm", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
-    path("api/auth/onboarding/resend", ResendOnboardingView.as_view(), name="auth-onboarding-resend"),
+    path(
+        "api/auth/password/reset",
+        PasswordResetRequestView.as_view(),
+        name="auth-password-reset",
+    ),
+    path(
+        "api/auth/password/reset/",
+        PasswordResetRequestView.as_view(),
+        name="auth-password-reset-slash",
+    ),
+    path(
+        "api/auth/password/reset/confirm",
+        PasswordResetConfirmView.as_view(),
+        name="auth-password-reset-confirm",
+    ),
+    path(
+        "api/auth/password/reset/confirm/",
+        PasswordResetConfirmView.as_view(),
+        name="auth-password-reset-confirm-slash",
+    ),
+    path(
+        "api/auth/onboarding/resend",
+        ResendOnboardingView.as_view(),
+        name="auth-onboarding-resend",
+    ),
+    path(
+        "api/auth/onboarding/resend/",
+        ResendOnboardingView.as_view(),
+        name="auth-onboarding-resend-slash",
+    ),
     path("api/products/", include("products.urls")),
+    path("api/products", include("products.urls")),
     path("api/policies/", include("policies.urls")),
+    path("api/policies", include("policies.urls")),
     path("api/payments/", include("payments.urls")),
+    path("api/payments", include("payments.urls")),
     path("api/quotes/", include("quotes.urls")),
+    path("api/quotes", include("quotes.urls")),
     path("api/vehicles/", include("vehicles.urls")),
+    path("api/vehicles", include("vehicles.urls")),
     path("api/announcements/", legacy_announcements_list, name="legacy-announcements-list"),
-    path("api/announcements/<int:pk>/", legacy_announcements_detail, name="legacy-announcements-detail"),
+    path("api/announcements", legacy_announcements_list, name="legacy-announcements-list-noslash"),
+    path(
+        "api/announcements/<int:pk>/",
+        legacy_announcements_detail,
+        name="legacy-announcements-detail",
+    ),
+    path(
+        "api/announcements/<int:pk>",
+        legacy_announcements_detail,
+        name="legacy-announcements-detail-noslash",
+    ),
     # Rutas admin esperadas por el front
     path("api/admin/policies/", include("policies.admin_urls")),
+    path("api/admin/policies", include("policies.admin_urls")),
     path("api/admin/accounts/", include("accounts.admin_urls")),
+    path("api/admin/accounts", include("accounts.admin_urls")),
     path("api/admin/products/", include("products.admin_urls")),
+    path("api/admin/products", include("products.admin_urls")),
     path("api/admin/", include("accounts.admin_urls")),
+    path("api/admin", include("accounts.admin_urls")),
 ]
 
 

@@ -3,6 +3,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 from rest_framework import permissions
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.permissions import SAFE_METHODS
 
 from .authentication import PublicUserProxy, SoftJWTAuthentication, StrictJWTAuthentication
@@ -133,11 +134,6 @@ class PublicEndpointMixin(EndpointAccessGuardMixin):
     def get_authenticators(self):
         return [SoftJWTAuthentication(purpose=SoftJWTAuthentication.PURPOSE_PUBLIC)]
 
-    def initialize_request(self, request, *args, **kwargs):
-        drf_request = super().initialize_request(request, *args, **kwargs)
-        drf_request.user = PublicUserProxy()
-        drf_request.auth = None
-        return drf_request
 
 
 class PrivateEndpointMixin(EndpointAccessGuardMixin):
@@ -148,3 +144,15 @@ class PrivateEndpointMixin(EndpointAccessGuardMixin):
     endpoint_access = "private"
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [StrictJWTAuthentication]
+
+
+class DebugOnlyAdminMixin:
+    """
+    Helper para evitar que actions o views de debug salgan a producción.
+    """
+
+    def _require_debug_admin(self, request):
+        if not settings.DEBUG:
+            raise NotFound()
+        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+            raise PermissionDenied()

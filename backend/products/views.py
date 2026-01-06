@@ -1,5 +1,7 @@
 # backend/products/views.py
+from audit.helpers import AuditModelViewSetMixin
 from rest_framework import viewsets, permissions, status, response
+from rest_framework.permissions import IsAdminUser
 from rest_framework.generics import ListAPIView
 from common.authentication import OptionalAuthenticationMixin
 from common.security import PublicEndpointMixin
@@ -61,13 +63,13 @@ class HomeProductsListView(PublicEndpointMixin, ListAPIView):
         return qs
 
 
-class ProductAdminViewSet(viewsets.ModelViewSet):
+class ProductAdminViewSet(AuditModelViewSetMixin, viewsets.ModelViewSet):
     """
     CRUD admin para productos/planes
     Endpoints esperados por el front: /api/admin/insurance-types
     """
     serializer_class = AdminProductSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdminUser]
 
     def get_queryset(self):
         return (

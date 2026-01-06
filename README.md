@@ -34,10 +34,26 @@
 - En producción se exige `MP_WEBHOOK_SECRET` (o `MP_REQUIRE_WEBHOOK_SECRET=true`); sin secreto se rechaza.
 
 ## Autenticación y 2FA (staff/admin)
-- El login corta con 403 si el usuario está inactivo (`is_active=False`).
-- Usuarios staff requieren 2FA: el primer POST a `/api/auth/login` con credenciales válidas devuelve `require_otp=true` y envía el código al email del usuario; hay un rate limit de intentos en cache.
-- El segundo POST debe incluir `otp`; si es correcto devuelve tokens JWT y datos del usuario.
-- El login público (`/api/auth/login` y `/api/auth/register`) requiere emails únicos; el modelo `User.email` es `unique=True` (ejecutá migración tras desplegar).
+- El login JWT público usa `POST /api/accounts/jwt/create/` con `{ "email": "...", "password": "..." }` y responde con `{ "refresh": "...", "access": "..." }`. Ya no se acepta DNI como identificador; el backend devuelve 400 con un detalle claro para payloads incompletos.
+- Si la cuenta está desactivada (`is_active=False`) el backend corta con 403 y el front lo muestra en pantalla; cuando el backend indica un `detail` o errores por campo (`email`, `password`) el cliente los expone tal cual vienen.
+- El refresh token se obtiene desde `POST /api/accounts/jwt/refresh/` con `{ "refresh": "<token>" }`, y el interceptor mantiene el `Authorization: Bearer <access>` automáticamente.
+- Los admins pueden seguir recibiendo `require_otp=true` (el backend decide cuándo activar 2FA). En ese caso el frontend muestra el aviso y vuelve a enviar el código junto a las credenciales hasta obtener los tokens.
+- El endpoint de registro sigue siendo `/api/auth/register` y exige emails únicos porque `User.email` es `unique=True`.
+- Verificá en DevTools que el `GET /api/accounts/users/me` no manda una barra final: el cliente usa las constantes de `frontend/src/api/endpoints.js` y el interceptor lanza un error informativo en dev si se intenta agregar `/me/`. Esa solicitud debe llegar como `/api/accounts/users/me` para evitar el 404.
+
+### Smoke test de login JWT
+1. Arrancá el backend y el dev server (`npm run dev`). Asegurate de usar `VITE_API_BASE_URL`/`VITE_API_URL` apuntando a un `/api` válido (el proxy de Vite ya redirige `/api` a `localhost:8000`).
+2. Probá los seeds aprobados:
+   - `admin@seguros.test` / `Admin123!`
+   - `user@seguros.test` / `User12345!`
+3. Desde la terminal podés verificar el endpoint con:
+   ```
+   curl -X POST "http://127.0.0.1:8000/api/accounts/jwt/create/" \
+     -H "Content-Type: application/json" \
+     -d '{"email":"admin@seguros.test","password":"Admin123!"}' | jq .
+   ```
+   deberías ver `refresh` y `access` en el JSON; el frontend guarda esos tokens en `localStorage` (`sc_access`, `sc_refresh`) y luego consulta `/accounts/users/me` para determinar el rol.
+4. Cuando ingresás desde la UI el sistema redirige a `/admin` (si es admin) o `/dashboard/seguro` (cliente); confirmá que después del login el dashboard carga y no necesitás cambiar nada más de lado del frontend.
 
 ## CORS / Orígenes permitidos
 - Usá `FRONTEND_ORIGINS` (puede ser `http://localhost:5173,http://127.0.0.1:5173` en dev y los dominios oficiales en prod) para que Django exponga los encabezados CORS/CSRF al frontend. El backend también usa esas URLs para construir enlaces de reinicio de contraseña.
@@ -87,7 +103,7 @@ El botón aparece, el backend responde OK pero el usuario no ve cambios | El `fi
 5. Instalá las dependencias del backend (`pip install -r backend/requirements.txt`) para que `google-auth` esté disponible.
 6. Reiniciá Django/Daphne (o el WSGI) y el dev server/build del frontend para recargar envs.
 7. Ejecutá el smoke test descrito arriba y confirmá que `/api/auth/google/status` devuelve `true` en `google_login_enabled` y `google_client_id_configured`.
-8. Verificá que el login clásico (`/api/auth/login`) sigue funcionando (mismo flujo sin tocar).
+8. Verificá que el login JWT (`/api/accounts/jwt/create/`) sigue funcionando con `email` + `password` y que el refresh `POST /api/accounts/jwt/refresh/` entrega nuevos `access` tokens.
 9. Recorre la sección de Troubleshooting si aparece algún `invalid token`, `aud mismatch`, issuer reject o CORS repeat.
 10. Documentá en el release (o en el deploy ticket) los valores reales usados y los pasos seguidos.
 
@@ -117,7 +133,7 @@ El botón aparece, el backend responde OK pero el usuario no ve cambios | El `fi
 ## Throttling / rate limiting
 - Global: `anon` y `user` (configurables por env).
 - Scopes específicos:
-  - `login` para `/api/auth/login`
+  - `login` para `/api/accounts/jwt/create/`
   - `reset` para `/api/auth/password/reset` y `/api/auth/password/reset/confirm`
   - `register` para `/api/auth/register`
   - `quotes` para `/api/quotes/*`
@@ -154,3 +170,14 @@ La variante `STRICT=1` falla si el código usa interpolaciones dinámicas (p. ej
 3. El cliente se registrará y, desde la sección **Asociar póliza** (`GET /claim-policy`), ingresará apenas ese número. El backend solo valida que exista la póliza y no esté vinculada a otro usuario, sin requerir códigos adicionales.
 4. Una vez asociada, el cliente puede pagar (`POST /api/payments/policies/{id}/create_preference`) y consultar recibos (`/api/payments/.../receipts`); Mercado Pago reporta a `/api/payments/webhook` con `MP_WEBHOOK_SECRET`.
 5. Los admins siguen pudiendo actualizar cuotas y reenviar onboarding (`POST /api/auth/onboarding/resend`), pero ya no hay `claim_code` obligatorio para asociar una póliza.
+
+## Observabilidad
+### Logging
+- El backend ahora usa `python-json-logger` para emitir todos los logs en JSON hacia `stdout`, incluyendo los campos `time`, `level`, `name`, `message` y `request_id`.
+- Cada request recibe (y retorna) la cabecera `X-Request-ID`; el `RequestIDMiddleware` también expone ese valor via `contextvars`, así que cualquier logger puede usarlo con el filtro `common.logging.RequestIDFilter`.
+- `AccessLogMiddleware` genera una línea `INFO` al final de cada request con `request_id`, `method`, `path`, `status_code`, `duration_ms`, `user_id`, `client_ip` y `user_agent`, y en `DEBUG` (`POST/PUT/PATCH/DELETE` JSON) incluye el payload con campos sensibles redacted.
+- Para ajustar qué campos se consideran sensibles podés sobrescribir `REQUEST_LOG_REDACTION_FIELDS` en `.env` (por ejemplo añadiendo `otp` o `secret_key`). En cualquier caso no se loguea `Authorization`, passwords, tokens ni secretos fuera del payload en debug.
+- `django-prometheus` expone un endpoint `/metrics/` con `http_requests_total` y `http_request_duration_seconds` (con etiquetas por método/route/status) y agrega contadores personalizados (`webhooks_*`, `payments_*`) para seguir los webhooks de Mercado Pago y la creación/confirmación/rechazo de pagos.
+- Protegé `/metrics/` en el proxy que esté delante de Django: en Nginx podés usar una whitelist (`allow 10.0.0.0/8; deny all; proxy_pass http://django:8000/metrics/;`) o autenticación básica (`auth_basic "Metrics"; auth_basic_user_file /etc/nginx/metrics.htpasswd; proxy_pass http://django:8000/metrics/;`). Aplicá esas reglas solo al `location /metrics/`.
+- Para que el backend sólo confíe en `X-Forwarded-For` proveniente de proxies confiables, definí `TRUSTED_PROXY_IPS` o `TRUSTED_PROXY_NETWORKS` en `.env` (por ejemplo `TRUSTED_PROXY_IPS=127.0.0.1,10.0.0.1` o `TRUSTED_PROXY_NETWORKS=10.0.0.0/8`). Nginx puede agregar `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` y proxear hacia Django mientras que otros clientes no pueden falsificar el origen porque el middleware ignora el header si `REMOTE_ADDR` no pertenece a la lista confiable.
+- Además, la nueva app `audit` persiste un `AuditLog` por cada cambio crítico (política, pago, webhook, acciones admin) con `request_id`, actor_ID, IP y datos before/after saneados. Si necesitás permitir campos adicionales podés configurar `AUDIT_LOG_SENSITIVE_KEYWORDS` en `.env` (por defecto elimina `password`, `token`, `secret`, etc.).

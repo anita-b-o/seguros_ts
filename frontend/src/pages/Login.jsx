@@ -4,6 +4,23 @@ import useAuth from "@/hooks/useAuth";
 import GoogleLoginButton from "@/components/auth/GoogleLoginButton";
 import "@/styles/Login.css";
 
+const EMAIL_PATTERN = /\S+@\S+\.\S+/;
+
+function normalizeFieldErrors(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => `${item}`);
+  return [`${value}`];
+}
+
+function deriveBackendErrorMessage(responseData) {
+  if (!responseData) return "";
+  const parts = [];
+  if (responseData.detail) parts.push(responseData.detail);
+  parts.push(...normalizeFieldErrors(responseData.email));
+  parts.push(...normalizeFieldErrors(responseData.password));
+  return parts.length ? parts.join(" ") : responseData.error || "";
+}
+
 function isAdminUser(u) {
   if (!u) return false;
   const flag = u.is_admin ?? u.isAdmin ?? u.is_staff ?? u.admin ?? u.role;
@@ -44,7 +61,7 @@ export default function Login() {
     setErr("");
 
     if (!form.email) return setErr("Ingresá tu email.");
-    if (!/\S+@\S+\.\S+/.test(form.email)) return setErr("Ingresá un email válido.");
+    if (!EMAIL_PATTERN.test(form.email)) return setErr("Ingresá un email válido.");
     if (!form.password) return setErr("Ingresá tu contraseña.");
     if (needOtp && !form.otp) return setErr("Ingresá el código que te enviamos.");
 
@@ -87,8 +104,7 @@ export default function Login() {
       const target = admin ? "/admin" : (canUseFrom ? from : "/dashboard/seguro");
       nav(target, { replace: true });
     } catch (e2) {
-      const detail =
-        e2?.response?.data?.detail || e2?.response?.data?.error || "";
+      const detail = deriveBackendErrorMessage(e2?.response?.data);
       const status = e2?.response?.status;
       const fallbacks = {
         400: "Credenciales inválidas o datos incompletos.",

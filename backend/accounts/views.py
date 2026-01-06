@@ -1,4 +1,5 @@
 # backend/accounts/views.py
+from audit.helpers import AuditModelViewSetMixin
 from rest_framework import viewsets, permissions, decorators, response, status
 from .models import User
 from .serializers import UserSerializer
@@ -66,3 +67,23 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return response.Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminUserViewSet(AuditModelViewSetMixin, UserViewSet):
+    """Admin-only viewset for /api/admin/accounts/users.*
+
+    We intentionally do not expose self-service semantics under the /api/admin namespace.
+    """
+
+    def get_permissions(self):
+        return [permissions.IsAdminUser()]
+
+    @decorators.action(
+        detail=False,
+        methods=["get", "patch", "put"],
+        url_path="me",
+        permission_classes=[permissions.IsAdminUser],
+    )
+    def me(self, request):
+        # Admin 'me' behaves like the regular one, but remains admin-only.
+        return super().me(request)

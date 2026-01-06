@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "@/api";
+import { listAdminPolicies, getAdminSettings, patchAdminUser, patchAdminSettings } from "@/services";
 import useAuth from "@/hooks/useAuth";
 import LogoutButton from "@/components/auth/LogoutButton";
 import { daysUntil, isPolicyExpiringAfterWindow } from "./policyHelpers";
@@ -47,7 +47,7 @@ export default function AdminHome() {
     let page = 1;
     const accumulated = [];
     while (true) {
-      const { data } = await api.get("/admin/policies", {
+      const { data } = await listAdminPolicies({
         params: { page, page_size: pageSize },
       });
       const list = Array.isArray(data?.results)
@@ -67,7 +67,7 @@ export default function AdminHome() {
     setErr("");
     setLoading(true);
     try {
-      const { data } = await api.get("/common/admin/settings/");
+      const { data } = await getAdminSettings();
       const payWindowValue = Number(data?.payment_window_days);
       const displayValue = Number(data?.payment_due_day_display);
       const thresholdValue = Number(data?.expiring_threshold_days);
@@ -129,7 +129,7 @@ export default function AdminHome() {
     try {
       const payload = { email: profile.email };
       if (password) payload.password = password;
-      const { data } = await api.patch(`/admin/users/${user.id}`, payload);
+      const { data } = await patchAdminUser(user.id, payload);
       setSession({ user: data ? { ...user, ...data } : user });
       setPassword("");
       setPasswordConfirm("");
@@ -144,7 +144,7 @@ export default function AdminHome() {
     setSavingThreshold(true);
     setErr("");
     try {
-      await api.patch("/common/admin/settings/", {
+      await patchAdminSettings({
         payment_window_days: paymentWindow,
         payment_due_day_display: dueDayDisplay,
         expiring_threshold_days: expiringThresholdDays,

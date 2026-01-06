@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "@/api";
+import { listAdminPolicies, listAdminUsers, patchAdminUser, createAdminUser, patchAdminPolicy } from "@/services";
 import GearIcon from "./GearIcon";
 
 export default function Users() {
@@ -118,7 +118,7 @@ export default function Users() {
 
   async function fetchPoliciesList() {
     try {
-      const { data } = await api.get("/admin/policies", { params: { page: 1, page_size: 200 } });
+      const { data } = await listAdminPolicies({ params: { page: 1, page_size: 200 } });
       const arr = data?.results || data || [];
       setAvailablePolicies(arr);
     } catch {
@@ -136,7 +136,7 @@ export default function Users() {
     let page = 1;
     const result = [];
     while (true) {
-      const { data } = await api.get("/admin/users", {
+      const { data } = await listAdminUsers({
         params: { page, page_size: pageSize },
       });
       const list = Array.isArray(data?.results)
@@ -264,7 +264,7 @@ export default function Users() {
       if (inlineDraft.last_name) payload.last_name = inlineDraft.last_name;
       if (inlineDraft.dob) payload.birth_date = inlineDraft.dob;
       if (inlineDraft.phone) payload.phone = inlineDraft.phone;
-      await api.patch(`/admin/users/${inlineDraft.id}`, payload, { params: { partial: true } });
+      await patchAdminUser(inlineDraft.id, payload, { params: { partial: true } });
       await fetchUsers();
       setExpandedUserId(null);
       setInlineDraft(null);
@@ -280,7 +280,7 @@ export default function Users() {
     if (!id) return;
     setInlineSaving(true);
     try {
-      await api.patch(`/admin/users/${id}`, { is_active: false });
+      await patchAdminUser(id, { is_active: false });
       await fetchUsers();
       setExpandedUserId(null);
       setInlineDraft(null);
@@ -295,7 +295,7 @@ export default function Users() {
     if (!policyId || !expandedUserId) return;
     setInlinePolicySaving(true);
     try {
-      await api.patch(`/admin/policies/${policyId}`, { user_id: expandedUserId });
+      await patchAdminPolicy(policyId, { user_id: expandedUserId });
       await fetchUsers();
       await fetchPoliciesList();
       setInlinePoliciesInput("");
@@ -310,7 +310,7 @@ export default function Users() {
     if (!policyId) return;
     setInlinePolicySaving(true);
     try {
-      await api.patch(`/admin/policies/${policyId}`, { user_id: null });
+      await patchAdminPolicy(policyId, { user_id: null });
       await fetchUsers();
       await fetchPoliciesList();
     } catch (e) {
@@ -346,9 +346,9 @@ export default function Users() {
       if (manageModal.draft.phone) payload.phone = manageModal.draft.phone;
       payload.policy_ids = filteredPolicyIds;
       if (manageModal.row.id) {
-      await api.patch(`/admin/users/${manageModal.row.id}`, payload);
+      await patchAdminUser(manageModal.row.id, payload);
     } else {
-      await api.post("/admin/users", payload);
+      await createAdminUser(payload);
     }
       await fetchUsers();
       await fetchPoliciesList();
@@ -375,11 +375,11 @@ export default function Users() {
     setDeleteConfirm((s) => ({ ...s, loading: true }));
     try {
       const userId = deleteConfirm.row.id;
-      await api.patch(`/admin/users/${userId}`, { is_active: false });
+      await patchAdminUser(userId, { is_active: false });
       const policiesToDetach = availablePolicies.filter((p) => Number(p.user_id) === Number(userId));
       if (policiesToDetach.length > 0) {
         await Promise.all(
-          policiesToDetach.map((p) => api.patch(`/admin/policies/${p.id}`, { user_id: null }))
+          policiesToDetach.map((p) => patchAdminPolicy(p.id, { user_id: null }))
         );
       }
       await fetchUsers();
@@ -403,7 +403,7 @@ export default function Users() {
 
   async function restoreUser(id) {
     try {
-      await api.patch(`/admin/users/${id}`, { is_active: true });
+      await patchAdminUser(id, { is_active: true });
       await fetchUsers();
     } catch (e) {
       alert(e?.response?.data?.detail || "No se pudo recuperar el usuario.");

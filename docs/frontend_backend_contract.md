@@ -6,10 +6,10 @@ Resumen de todos los endpoints que consume el frontend (`src/**`). Cada fila ind
 | --- | --- | --- | --- | --- | --- | --- |
 | `frontend/src/hooks/useAuth.js:61`, `frontend/src/pages/dashboard/Profile.jsx:27` | GET | `/api/accounts/users/me` | `true` | Sí, `UserViewSet.me` (permiso `IsAuthenticated`). | Mantener la consulta inicial y convertir 401/403 en logout/redirect para evitar datos stale. | private |
 | `frontend/src/pages/dashboard/Profile.jsx:72` | PUT | `/api/accounts/users/me` | `true` | Sí, la misma acción acepta PATCH/PUT (IsAuthenticated). | Seguir enviando `birth_date` como `null` cuando está vacío y mostrar errores de validación 400. | private |
-| `frontend/src/hooks/useAuth.js:94` | POST | `/api/auth/login` | `false` | Sí, `EmailLoginView`. | Mantener; el backend ya retorna `require_otp` y tokens. | public |
-| `frontend/src/hooks/useAuth.js:114` | POST | `/api/auth/google` | `false` | Sí, `GoogleLoginView`. | Mantener y propagar errores/2FA que el backend devuelva. | public |
-| `frontend/src/hooks/useAuth.js:121` | POST | `/api/auth/register` | `false` | Sí, `RegisterView`. | Mantener y normalizar al user si el backend devuelve datos adicionales. | public |
-| `frontend/src/hooks/useAuth.js:138` | POST | `/api/auth/refresh` | `false` (refresh token enviado en body) | Sí, `TokenRefreshView`. | Seguir usando para revalidar y forzar logout cuando no haya refresh. | private |
+| `frontend/src/hooks/useAuth.js:83` | POST | `/api/accounts/jwt/create/` | `false` | Sí, `TokenObtainPairView`. | Mantener; el backend devuelve `refresh`/`access` y `require_otp` si aplica. | public |
+| `frontend/src/hooks/useAuth.js:129` | POST | `/api/auth/google` | `false` | Sí, `GoogleLoginView`. | Mantener y propagar errores/2FA que el backend devuelva. | public |
+| `frontend/src/hooks/useAuth.js:139` | POST | `/api/auth/register` | `false` | Sí, `RegisterView`. | Mantener y normalizar al user si el backend devuelve datos adicionales. | public |
+| `frontend/src/hooks/useAuth.js:154` | POST | `/api/accounts/jwt/refresh/` | `false` (refresh token enviado en body) | Sí, `TokenRefreshView`. | Seguir usando para revalidar y forzar logout cuando no haya refresh. | private |
 | `frontend/src/pages/Logout.jsx:15` | POST | `/api/auth/logout` | `false` | Sí, `LogoutView`. | Llamada opcional; igual limpiá tokens locales aunque falle el logout server. | private |
 | `frontend/src/pages/ResetRequest.jsx:21` | POST | `/api/auth/password/reset` | `false` | Sí, `PasswordResetRequestView`. | Mantener y mostrar el detalle del backend cuando devuelve `detail`. | public |
 | `frontend/src/pages/ResetConfirm.jsx:41` | POST | `/api/auth/password/reset/confirm` | `false` | Sí, `PasswordResetConfirmView`. | Mantener y traducir errores de token expirado (410) a un mensaje claro. | public |

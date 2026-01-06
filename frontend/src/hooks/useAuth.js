@@ -1,6 +1,7 @@
 import React from "react";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/api";
+import { ensureSingularNoTrailingSlash, USERS_ME } from "@/api/endpoints";
 
 const AuthCtx = createContext(null);
 
@@ -14,6 +15,16 @@ function readLS(key) {
 function writeLS(key, val) {
   if (val === null || val === undefined) localStorage.removeItem(key);
   else localStorage.setItem(key, JSON.stringify(val));
+}
+
+function normalizeEmailInput(raw) {
+  return (raw || "").toString().trim().toLowerCase();
+}
+
+const PROFILE_ENDPOINT = ensureSingularNoTrailingSlash(USERS_ME);
+
+function getCurrentUser() {
+  return api.get(PROFILE_ENDPOINT);
 }
 
 /** 🔐 Normaliza cualquier forma de “admin” a boolean estricto. */
@@ -58,7 +69,7 @@ export function AuthProvider({ children }) {
     try {
       if (!user && access) {
         // ⚠️ Ajustá la ruta si tu backend usa /me en vez de /users/me
-        const { data } = await api.get("/accounts/users/me");
+        const { data } = await getCurrentUser();
         if (data) setSession({ user: data });
       }
     } catch {
@@ -69,24 +80,16 @@ export function AuthProvider({ children }) {
   }
 
   // ------ acciones públicas ------
-  async function resolveLoginIdentifier(rawInput) {
-    const input = (rawInput || "").toString().trim();
-    if (!input) throw new Error("Email o DNI requerido.");
-    if (!input.includes("@")) {
-      return input;
-    }
-    return input.toLowerCase();
-  }
-
   async function login({ email, password, otp }) {
-    const identifier = await resolveLoginIdentifier(email);
+    const normalizedEmail = normalizeEmailInput(email);
+    const payload = {
+      email: normalizedEmail,
+      password,
+      ...(otp ? { otp } : {}),
+    };
     const { data } = await api.post(
-      "/auth/login",
-      {
-        email: identifier,
-        password,
-        otp,
-      },
+      "/accounts/jwt/create/",
+      payload,
       { requiresAuth: false }
     );
     // Si el backend pide 2FA, devolvemos bandera y no seteamos sesión
@@ -99,8 +102,28 @@ export function AuthProvider({ children }) {
       };
     }
     // se espera: { user, access, refresh } (o nombres equivalentes)
-    setSession({ user: data.user, access: data.access, refresh: data.refresh });
-    return normalizeUser(data.user); // ✅ devolvemos user normalizado
+    const accessToken = data?.access;
+    const refreshToken = data?.refresh;
+    if (!accessToken || !refreshToken) {
+      throw new Error("Timeout inesperado en login.");
+    }
+
+    setSession({ access: accessToken, refresh: refreshToken });
+
+    try {
+      // usamos el endpoint exacto sin slash final para evitar 404 del backend
+      const { data: profile } = await getCurrentUser();
+      setSession({ user: profile });
+      return normalizeUser(profile);
+    } catch (profileError) {
+      const message =
+        profileError?.response?.data?.detail ||
+        profileError?.response?.data?.error ||
+        "No pudimos cargar tus datos.";
+      const err = new Error(message);
+      err.response = profileError?.response;
+      throw err;
+    }
   }
 
   async function googleLogin({ id_token }) {
@@ -135,7 +158,7 @@ export function AuthProvider({ children }) {
     const p = (async () => {
       try {
         const { data } = await api.post(
-          "/auth/refresh",
+          "/accounts/jwt/refresh/",
           { refresh },
           { requiresAuth: false }
         );

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/api";
+import { listAdminPolicies, listAdminUsers, listAdminInsuranceTypes, getAdminSettings, patchAdminPolicy, createAdminPolicy, listPendingPayments } from "@/services";
 import { fetchQuoteShare } from "@/services/quoteShare";
 import GearIcon from "./GearIcon";
 import { addMonths, daysUntil, visibleEndDate, paymentWindow, isPolicyExpiringAfterWindow, nextInstallment } from "./policyHelpers";
@@ -169,7 +170,7 @@ async function fetchAdminPolicies({ pageSize = ADMIN_FETCH_PAGE_SIZE } = {}) {
   const all = [];
   let page = 1;
   while (true) {
-    const { data } = await api.get("/admin/policies", {
+    const { data } = await listAdminPolicies({
       params: { page, page_size: pageSize },
     });
     const arr = Array.isArray(data?.results)
@@ -311,7 +312,7 @@ export default function Policies() {
 
   async function fetchUsers() {
     try {
-      const { data } = await api.get("/admin/users");
+      const { data } = await listAdminUsers();
       const arr = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
       setUsers(arr);
     } catch {
@@ -321,7 +322,7 @@ export default function Policies() {
 
   async function fetchProducts() {
     try {
-      const { data } = await api.get("/admin/insurance-types");
+      const { data } = await listAdminInsuranceTypes();
       const arr = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
       setProducts(arr);
     } catch {
@@ -342,7 +343,7 @@ export default function Policies() {
 
   async function fetchSettings() {
     try {
-      const { data } = await api.get("/common/admin/settings/");
+      const { data } = await getAdminSettings();
 
       // soporta: {..}, {settings:{..}}, {results:[{..}]}
       const s =
@@ -642,7 +643,7 @@ export default function Policies() {
     }
 
     try {
-      await api.patch(`/admin/policies/${inlineDraft.id}`, payload);
+      await patchAdminPolicy(inlineDraft.id, payload);
       setExpandedId(null);
       setExpandedSection(null);
       setInlineDraft(null);
@@ -898,9 +899,9 @@ export default function Policies() {
 
     try {
       if (editing.id) {
-        await api.patch(`/admin/policies/${editing.id}`, payload);
+        await patchAdminPolicy(editing.id, payload);
       } else {
-        await api.post(`/admin/policies`, payload);
+        await createAdminPolicy(payload);
       }
       setDrawerOpen(false);
       setEditing(null);
@@ -960,7 +961,7 @@ export default function Policies() {
     setPaymentsError("");
     try {
       const [chargesRes, receiptsRes] = await Promise.all([
-        api.get("/payments/pending", { params: { policy_id: policyId } }),
+        listPendingPayments({ params: { policy_id: policyId } }),
         api.get(`/policies/${policyId}/receipts`),
       ]);
       const chargesPayload = Array.isArray(chargesRes.data) ? chargesRes.data : Array.isArray(chargesRes.data?.results) ? chargesRes.data.results : [];
@@ -1025,7 +1026,7 @@ export default function Policies() {
         payload.vehicle = veh;
       }
 
-      await api.patch(`/admin/policies/${manageModal.row.id}`, payload);
+      await patchAdminPolicy(manageModal.row.id, payload);
       if (manualPaymentQueued) {
         setManualPaying(true);
         try {
@@ -1059,7 +1060,7 @@ export default function Policies() {
     if (!deleteConfirm.row) return;
     setDeleteConfirm((s) => ({ ...s, loading: true }));
     try {
-      await api.patch(`/admin/policies/${deleteConfirm.row.id}`, { status: "inactive", user_id: null });
+      await patchAdminPolicy(deleteConfirm.row.id, { status: "inactive", user_id: null });
       await fetchPolicies();
       if (expandedId === deleteConfirm.row.id) {
         setExpandedId(null);
@@ -1081,7 +1082,7 @@ export default function Policies() {
     if (!restoreConfirm.row) return;
     setRestoreConfirm((s) => ({ ...s, loading: true }));
     try {
-      await api.patch(`/admin/policies/${restoreConfirm.row.id}`, { status: "active" });
+      await patchAdminPolicy(restoreConfirm.row.id, { status: "active" });
       await fetchPolicies();
       setRestoreConfirm({ open: false, row: null, loading: false });
     } catch (e) {

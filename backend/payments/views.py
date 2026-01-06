@@ -25,6 +25,8 @@ from policies.billing import (
 from policies.models import Policy, PolicyInstallment
 
 from .models import Payment, Receipt, PaymentWebhookEvent
+from audit.helpers import audit_log, snapshot_entity
+from common import metrics
 from .serializers import PaymentSerializer
 from .utils import generate_receipt_pdf
 
@@ -202,9 +204,20 @@ def _process_mp_webhook_for_payment(
 ):
     event_id = _get_mp_webhook_event_id(payload_dict)
     receipt = None
+    metrics.webhooks_processed_total.inc()
+    before_snapshot = snapshot_entity(payment)
 
     with transaction.atomic():
         if not _try_create_mp_webhook_event(payment, event_id, payload_dict):
+            metrics.webhooks_duplicate_total.inc()
+            audit_log(
+                action="webhook_duplicate",
+                entity_type="Payment",
+                entity_id=str(payment.pk),
+                before=before_snapshot,
+                extra={"event_id": event_id},
+                request=None,
+            )
             return Response({"detail": "ok"})
 
         locked_payment = (
@@ -295,6 +308,7 @@ def _process_mp_webhook_for_payment(
             )
 
         if status_norm == "approved":
+            metrics.payments_confirmed_total.inc()
             if policy is None:
                 logger.warning(
                     "mp_webhook_approved_without_policy",
@@ -312,6 +326,7 @@ def _process_mp_webhook_for_payment(
 
             locked_payment.state = "APR"
             locked_payment.save(update_fields=["state", "mp_payment_id"])
+            after_snapshot = snapshot_entity(locked_payment)
 
             installment = locked_payment.installment
             locked_installment = None
@@ -360,12 +375,39 @@ def _process_mp_webhook_for_payment(
                     "installment_id": getattr(locked_installment, "id", None),
                 },
             )
+            audit_log(
+                action="webhook_payment_approved",
+                entity_type="Payment",
+                entity_id=str(locked_payment.pk),
+                before=before_snapshot,
+                after=after_snapshot,
+                extra={
+                    "event_id": event_id,
+                    "mp_payment_id": mp_payment_id,
+                    "status": status_norm,
+                },
+                request=None,
+            )
         elif status_norm == "rejected":
+            metrics.payments_failed_total.inc()
             locked_payment.state = "REJ"
             locked_payment.save(update_fields=["mp_payment_id", "state"])
             logger.info(
                 "mp_webhook_payment_rejected",
                 extra={"payment_id": locked_payment.id, "policy_id": locked_payment.policy_id, "mp_payment_id": mp_payment_id},
+            )
+            audit_log(
+                action="webhook_payment_rejected",
+                entity_type="Payment",
+                entity_id=str(locked_payment.pk),
+                before=before_snapshot,
+                after=snapshot_entity(locked_payment),
+                extra={
+                    "event_id": event_id,
+                    "mp_payment_id": mp_payment_id,
+                    "status": status_norm,
+                },
+                request=None,
             )
         else:
             locked_payment.state = "PEN"
@@ -373,6 +415,19 @@ def _process_mp_webhook_for_payment(
             logger.info(
                 "mp_webhook_payment_pending",
                 extra={"payment_id": locked_payment.id, "policy_id": locked_payment.policy_id, "mp_payment_id": mp_payment_id},
+            )
+            audit_log(
+                action="webhook_payment_pending",
+                entity_type="Payment",
+                entity_id=str(locked_payment.pk),
+                before=before_snapshot,
+                after=snapshot_entity(locked_payment),
+                extra={
+                    "event_id": event_id,
+                    "mp_payment_id": mp_payment_id,
+                    "status": status_norm,
+                },
+                request=None,
             )
 
         payment = locked_payment
@@ -578,6 +633,20 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     period=period,
                     amount=amount,
                 )
+                metrics.payments_created_total.inc()
+                audit_log(
+                    action="payment_created",
+                    entity_type="Payment",
+                    entity_id=str(payment.pk),
+                    after=snapshot_entity(payment),
+                    request=request,
+                    actor=request.user,
+                    extra={
+                        "policy_id": policy.id,
+                        "installment_id": installment.id,
+                        "amount": float(amount),
+                    },
+                )
         logger.info(
             "payment_create_preference_start",
             extra={
@@ -751,6 +820,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 @authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def mp_webhook(request):
+    metrics.webhooks_received_total.inc()
     auth = _authorize_mp_webhook(request)
     # Backward compatibility: some deployments returned 2-tuple (ok, detail).
     if isinstance(auth, tuple) and len(auth) == 3:
@@ -767,6 +837,14 @@ def mp_webhook(request):
                 "reason": err,
                 **_webhook_request_context(request),
             },
+        )
+        metrics.webhooks_invalid_signature_total.inc()
+        audit_log(
+            action="webhook_invalid_signature",
+            entity_type="PaymentWebhookEvent",
+            entity_id=event_id if event_id else None,
+            extra={"reason": err},
+            request=request,
         )
         return Response({'detail': err}, status=status_code)
 
@@ -789,6 +867,13 @@ def mp_webhook(request):
     logger.info(
         "mp_webhook_authorized",
         extra={"event": {k: v for k, v in event_extra.items() if v}},
+    )
+    audit_log(
+        action="webhook_received",
+        entity_type="PaymentWebhookEvent",
+        entity_id=event_id if event_id else None,
+        after={"event": event_extra, "status": status_str},
+        request=request,
     )
 
     # Si viene id de MP y hay token, consultamos a MP para validar
@@ -825,6 +910,7 @@ def mp_webhook(request):
 @permission_classes([permissions.IsAdminUser])
 def manual_payment(request, policy_id=None):
     policy = get_scoped_policy_or_404(request, id=policy_id)
+    admin_user_id = request.user.id if request.user and request.user.is_authenticated else None
     settings_obj = AppSettings.get_solo()
     today = date.today()
     cycle = current_payment_cycle(policy, settings_obj) or {}
@@ -864,6 +950,16 @@ def manual_payment(request, policy_id=None):
                 next_due=None,
                 date=date.today(),
             )
+        logger.info(
+            "manual_payment_existing",
+            extra={
+                "policy_id": policy.id,
+                "admin_user_id": admin_user_id,
+                "period": period_str,
+                "amount": premium,
+                "payment_id": existing_payment.id,
+            },
+        )
         return Response(
             {
                 "detail": _manual_detail("Pago manual ya registrado."),
@@ -879,6 +975,19 @@ def manual_payment(request, policy_id=None):
         amount=premium,
         state="APR",
         mp_payment_id="manual",
+    )
+    audit_log(
+        action="manual_payment_created",
+        entity_type="Payment",
+        entity_id=str(pay_obj.pk),
+        after=snapshot_entity(pay_obj),
+        request=request,
+        actor=request.user,
+        extra={
+            "policy_id": policy.id,
+            "period": period_str,
+            "amount": float(premium or 0),
+        },
     )
     installment = mark_cycle_installment_paid(policy, payment=pay_obj)
     receipt = Receipt.objects.create(
@@ -896,6 +1005,17 @@ def manual_payment(request, policy_id=None):
         pay_obj.save(update_fields=["receipt_pdf"])
         receipt.file.name = rel_path
         receipt.save(update_fields=["file"])
+
+    logger.info(
+        "manual_payment_created",
+        extra={
+            "policy_id": policy.id,
+            "admin_user_id": admin_user_id,
+            "period": period_str,
+            "amount": premium,
+            "payment_id": pay_obj.id,
+        },
+    )
 
     return Response(
         {

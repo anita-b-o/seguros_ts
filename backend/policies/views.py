@@ -1,6 +1,8 @@
 # backend/policies/views.py
 from django.db.models import Prefetch, Q
+from audit.helpers import AuditModelViewSetMixin
 from rest_framework import viewsets, permissions
+from rest_framework.permissions import IsAdminUser
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .access import policy_scope_queryset
@@ -359,6 +361,5 @@ class PolicyViewSet(PolicyBaseViewSet):
         return [permissions.IsAdminUser()]
 
 
-class AdminPolicyViewSet(PolicyBaseViewSet):
-    def get_permissions(self):
-        return [permissions.IsAdminUser()]
+class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
+    permission_classes = [IsAdminUser]

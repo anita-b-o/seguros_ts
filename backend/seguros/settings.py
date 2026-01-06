@@ -8,6 +8,7 @@ from django.core.cache import caches
 from django.core.exceptions import ImproperlyConfigured
 
 from payments.webhook_config import ensure_mp_webhook_configuration
+from pythonjsonlogger import jsonlogger
 
 # === BASE DIR ===
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -110,6 +111,9 @@ DEPLOYMENT_ENV = DEPLOYMENT_ENV.strip().lower()
 RUNNING_TESTS = "test" in " ".join(sys.argv)
 DEBUG = _bool(os.getenv("DJANGO_DEBUG") or os.getenv("DEBUG"), False)
 
+# API policy: no forced redirects (APPEND_SLASH=False) while routers expose endpoints with optional trailing slashes via trailing_slash="/?"
+APPEND_SLASH = False
+
 if DEBUG and DEPLOYMENT_ENV in ("prod", "production"):
     raise ImproperlyConfigured(
         "DEBUG cannot be True when DJANGO_ENV=production."
@@ -154,6 +158,8 @@ AUTH_USER_MODEL = "accounts.User"
 
 # === INSTALLED APPS ===
 INSTALLED_APPS = [
+    "django_prometheus",
+    "audit",
     # Django apps
     "django.contrib.admin",
     "django.contrib.auth",
@@ -180,6 +186,7 @@ INSTALLED_APPS = [
 
 # === MIDDLEWARE ===
 MIDDLEWARE = [
+    "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",  # CORS alto y antes de Common
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -188,6 +195,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "common.middlewares.RequestIDMiddleware",
+    "common.middlewares.AccessLogMiddleware",
+    "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
 
 
@@ -283,7 +293,9 @@ ensure_redis_cache_configuration(
     REDIS_URL,
     running_tests=RUNNING_TESTS,
 )
-ensure_redis_cache_health(DEBUG, running_tests=RUNNING_TESTS)
+RUN_REDIS_HEALTHCHECK = _bool(os.getenv("RUN_REDIS_HEALTHCHECK"), False)
+if RUN_REDIS_HEALTHCHECK:
+    ensure_redis_cache_health(DEBUG, running_tests=RUNNING_TESTS)
 
 # === OTP / RATE LIMIT ===
 OTP_PEPPER = os.getenv("OTP_PEPPER")
@@ -347,6 +359,7 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
     "ALGORITHM": os.getenv("JWT_ALGORITHM", "HS256"),
     "SIGNING_KEY": os.getenv("JWT_SIGNING_KEY", SECRET_KEY),
+    "TOKEN_OBTAIN_SERIALIZER": "accounts.jwt_serializers.EmailTokenObtainPairSerializer",
 }
 
 
@@ -408,17 +421,57 @@ if (
     )
 
 
-# === LOGGING BÁSICO ===
+# === LOGGING ESTRUCTURADO ===
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+REQUEST_LOG_REDACTION_FIELDS = (
+    "password",
+    "token",
+    "secret",
+    "authorization",
+    "access",
+    "refresh",
+)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "request_id": {"()": "common.logging.RequestIDFilter"},
+    },
+    "formatters": {
+        "json": {
+            "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+            "fmt": "%(asctime)s %(levelname)s %(name)s %(message)s %(request_id)s",
+        },
+    },
     "handlers": {
-        "console": {"class": "logging.StreamHandler"},
+        "console": {
+            "class": "logging.StreamHandler",
+            "stream": sys.stdout,
+            "formatter": "json",
+            "filters": ["request_id"],
+        },
     },
     "root": {
         "handlers": ["console"],
         "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
     },
 }
 

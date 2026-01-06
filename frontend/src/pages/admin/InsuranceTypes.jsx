@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "@/api";
+import { listAdminInsuranceTypes, createAdminInsuranceType, patchAdminInsuranceType, deleteAdminInsuranceType } from "@/services";
 import GearIcon from "./GearIcon";
 
 export default function InsuranceTypes() {
@@ -21,7 +21,7 @@ export default function InsuranceTypes() {
   async function fetchAll() {
     setLoading(true); setErr("");
     try {
-      const { data } = await api.get("/admin/insurance-types");
+      const { data } = await listAdminInsuranceTypes();
       const list = Array.isArray(data) ? data : data?.results || [];
       setRows(list.map((r) => ({
         ...r,
@@ -74,14 +74,14 @@ export default function InsuranceTypes() {
       .filter(Boolean);
     try {
       if (editing) {
-        await api.patch(`/admin/insurance-types/${editing.id}`, {
+        await patchAdminInsuranceType(editing.id, {
           name: draft.name,
           subtitle: draft.subtitle,
           bullets,
           published_home: !!draft.published_home,
         });
       } else {
-        await api.post("/admin/insurance-types", {
+        await createAdminInsuranceType({
           name: draft.name,
           subtitle: draft.subtitle,
           bullets,
@@ -119,7 +119,7 @@ export default function InsuranceTypes() {
     if (!inlineDraft?.id) return;
     setInlineSaving(true);
     try {
-      await api.patch(`/admin/insurance-types/${inlineDraft.id}`, {
+      await patchAdminInsuranceType(inlineDraft.id, {
         name: inlineDraft.name,
         subtitle: inlineDraft.subtitle,
       });
@@ -142,7 +142,7 @@ export default function InsuranceTypes() {
     try {
       const payload = { is_active: !!active };
       if (active) payload.published_home = true; // al recuperar, vuelve a Home
-      await api.patch(`/admin/insurance-types/${row.id}`, payload);
+      await patchAdminInsuranceType(row.id, payload);
       await fetchAll();
       if (!active && expandedId === row.id) {
         setExpandedId(null);
@@ -373,7 +373,7 @@ export default function InsuranceTypes() {
                     if (!deleteConfirm.row?.id) return;
                     setDeleteConfirm((s) => ({ ...s, loading: true }));
                     try {
-                      await api.patch(`/admin/insurance-types/${deleteConfirm.row.id}`, { is_active: false });
+                      await patchAdminInsuranceType(deleteConfirm.row.id, { is_active: false });
                       setDeleteConfirm({ open: false, row: null, loading: false });
                       setFormOpen(false);
                       setEditing(null);
