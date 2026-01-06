@@ -5,6 +5,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
 from django.shortcuts import redirect
+from django_prometheus import exports
 from accounts.auth_views import EmailLoginView, PasswordResetRequestView, PasswordResetConfirmView, RegisterView, LogoutView, GoogleLoginView, GoogleLoginStatusView, ResendOnboardingView
 from accounts.views import deprecated_lookup
 from rest_framework_simplejwt.views import TokenRefreshView
@@ -26,6 +27,8 @@ def _env_bool(val):
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on") if val is not None else False
 
 urlpatterns = [
+    path("metrics/", exports.ExportToDjangoView, name="prometheus-metrics-slash"),
+    path("metrics", exports.ExportToDjangoView, name="prometheus-metrics"),
     # Admin — configurable por .env
     path(settings.ADMIN_URL, admin.site.urls),
 
@@ -34,6 +37,7 @@ urlpatterns = [
 
     # Healthcheck
     path("healthz/", healthcheck, name="healthcheck"),
+    path("healthz", healthcheck, name="healthcheck-noslash"),
 
     # API
     path("api/common/", include("common.urls")),
@@ -46,6 +50,11 @@ urlpatterns = [
     path("api/auth/register", RegisterView.as_view(), name="auth-register"),
     path("api/auth/google", GoogleLoginView.as_view(), name="auth-google"),
     path("api/auth/google/status", GoogleLoginStatusView.as_view(), name="auth-google-status"),
+    path(
+        "api/auth/google/status/",
+        GoogleLoginStatusView.as_view(),
+        name="auth-google-status-slash",
+    ),
     path("api/auth/password/reset", PasswordResetRequestView.as_view(), name="auth-password-reset"),
     path("api/auth/password/reset/confirm", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
     path("api/auth/onboarding/resend", ResendOnboardingView.as_view(), name="auth-onboarding-resend"),
@@ -57,9 +66,10 @@ urlpatterns = [
     path("api/announcements/", legacy_announcements_list, name="legacy-announcements-list"),
     path("api/announcements/<int:pk>/", legacy_announcements_detail, name="legacy-announcements-detail"),
     # Rutas admin esperadas por el front
-    path("api/admin/", include("policies.admin_urls")),
+    path("api/admin/policies/", include("policies.admin_urls")),
+    path("api/admin/accounts/", include("accounts.admin_urls")),
+    path("api/admin/products/", include("products.admin_urls")),
     path("api/admin/", include("accounts.admin_urls")),
-    path("api/admin/", include("products.admin_urls")),
 ]
 
 
@@ -79,12 +89,12 @@ urlpatterns += [
             {
                 "message": "San Cayetano API 🚗✅",
                 "endpoints": [
-                    "/api/accounts/",
-                    "/api/vehicles/",
-                    "/api/products/",
-                    "/api/policies/",
-                    "/api/payments/",
-                    "/api/quotes/",
+                    "/api/accounts",
+                    "/api/vehicles",
+                    "/api/products",
+                    "/api/policies",
+                    "/api/payments",
+                    "/api/quotes",
                     "/healthz/",
                     f"/{settings.ADMIN_URL}",
                 ],
