@@ -6,10 +6,9 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
 from products.models import Product
-from policies.billing import regenerate_installments
 from policies.models import Policy
+from payments.billing import get_or_create_current_period
 from payments.models import Payment
-from payments.utils import period_from_installment
 
 from common.metrics import (
     payments_confirmed_total,
@@ -54,13 +53,12 @@ class WebhookMetricsTest(APITestCase):
             end_date=date.today() + timedelta(days=90),
             status="active",
         )
-        regenerate_installments(self.policy)
-        self.installment = self.policy.installments.order_by("sequence").first()
-        period = period_from_installment(self.installment) or date.today().strftime("%Y%m")
-        amount = self.installment.amount or Decimal("0")
+        self.billing_period = get_or_create_current_period(self.policy)
+        period = self.billing_period.period_code or date.today().strftime("%Y%m")
+        amount = self.billing_period.amount or Decimal("0")
         self.payment = Payment.objects.create(
             policy=self.policy,
-            installment=self.installment,
+            billing_period=self.billing_period,
             period=period,
             amount=amount,
         )

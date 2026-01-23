@@ -7,7 +7,7 @@ from django.test import TestCase
 from rest_framework.test import APITestCase
 
 from audit.models import AuditLog
-from payments.models import Payment
+from payments.models import BillingPeriod, Payment
 from policies.billing import update_policy_status_from_installments
 from policies.models import Policy, PolicyInstallment
 from products.models import Product
@@ -164,7 +164,16 @@ class WebhookAuditTests(APITestCase):
         )
         self.payment = Payment.objects.create(
             policy=self.policy,
-            installment=installment,
+            billing_period=BillingPeriod.objects.create(
+                policy=self.policy,
+                period_start=installment.period_start_date,
+                period_end=installment.period_end_date,
+                due_date_soft=installment.due_date_display,
+                due_date_hard=installment.due_date_real,
+                amount=self.policy.premium,
+                currency="ARS",
+                status=BillingPeriod.Status.UNPAID,
+            ),
             period=date.today().strftime("%Y%m"),
             amount=self.policy.premium,
         )

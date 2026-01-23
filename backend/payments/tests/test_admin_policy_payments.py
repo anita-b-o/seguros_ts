@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 from django.test import TestCase
 
-from payments.models import Payment, Receipt, PaymentWebhookEvent
+from payments.models import BillingPeriod, Payment, Receipt, PaymentWebhookEvent
 from payments.views import _process_mp_webhook_for_payment, _normalize_payload
 from policies.billing import regenerate_installments
 from policies.models import Policy
@@ -38,9 +38,21 @@ class AdminPolicyPaymentsTests(TestCase):
     def _create_payment(self, policy):
         installment = policy.installments.order_by("sequence").first()
         period = f"{installment.period_start_date.year}{str(installment.period_start_date.month).zfill(2)}"
+        billing_period, _ = BillingPeriod.objects.get_or_create(
+            policy=policy,
+            period_start=installment.period_start_date,
+            defaults={
+                "period_end": installment.period_end_date or (installment.period_start_date + timedelta(days=30)),
+                "due_date_soft": installment.due_date_display or installment.period_start_date,
+                "due_date_hard": installment.due_date_real or installment.period_start_date,
+                "amount": installment.amount,
+                "currency": "ARS",
+                "status": BillingPeriod.Status.UNPAID,
+            },
+        )
         return Payment.objects.create(
             policy=policy,
-            installment=installment,
+            billing_period=billing_period,
             period=period,
             amount=installment.amount,
         )

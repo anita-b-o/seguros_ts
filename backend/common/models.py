@@ -1,10 +1,16 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
 class ContactInfo(models.Model):
     whatsapp = models.CharField("WhatsApp", max_length=50, blank=True, default="+54 9 221 000 0000")
     email = models.EmailField("Email", blank=True, default="hola@sancayetano.com")
-    address = models.CharField("Dirección", max_length=255, blank=True, default="Av. Ejemplo 1234, La Plata, Buenos Aires")
+    address = models.CharField(
+        "Dirección",
+        max_length=255,
+        blank=True,
+        default="Av. Ejemplo 1234, La Plata, Buenos Aires",
+    )
     map_embed_url = models.TextField(
         "URL de iframe de mapa",
         blank=True,
@@ -33,16 +39,43 @@ class ContactInfo(models.Model):
 
 
 class AppSettings(models.Model):
+    # --- Otros settings existentes ---
     expiring_threshold_days = models.PositiveIntegerField(default=7)
     client_expiration_offset_days = models.PositiveIntegerField(default=2)
     default_term_months = models.PositiveIntegerField(default=3)
-    payment_window_days = models.PositiveIntegerField(default=5)
+
+    # --- Cobro: ventana variable definida por admin ---
+    payment_window_days = models.PositiveIntegerField(
+        default=5,
+        help_text="Cantidad de días que dura la ventana de pago desde el inicio del ciclo mensual.",
+    )
+
+    # ✅ NUEVO: vencimiento adelantado visible para el cliente (offset)
+    payment_due_offset_days = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Cantidad de días ANTES del último día de la ventana de pago que se muestra como 'vencimiento' al cliente. "
+            "Debe ser menor que payment_window_days. Ej: window=10 y offset=3 => vencimiento visible = día 7."
+        ),
+    )
+
+    # --- Ajuste de precio (ya existente) ---
     policy_adjustment_window_days = models.PositiveIntegerField(
         default=7,
         help_text="Cantidad de días antes del fin de la póliza en los que se considera el periodo de ajuste.",
     )
-    payment_due_day_display = models.PositiveIntegerField(default=5, help_text="Día del mes comunicado al cliente como vencimiento (1-28/31).")
-    payment_due_day_real = models.PositiveIntegerField(default=7, help_text="Día del mes como corte real; debe ser >= display.")
+
+    # --- Campos legacy (se mantienen por compatibilidad/migraciones previas) ---
+    # Si ya no los usás, se pueden eliminar en un refactor posterior con migraciones.
+    payment_due_day_display = models.PositiveIntegerField(
+        default=5,
+        help_text="LEGACY: Día del mes comunicado al cliente como vencimiento (1-28/31).",
+    )
+    payment_due_day_real = models.PositiveIntegerField(
+        default=7,
+        help_text="LEGACY: Día del mes como corte real; debe ser >= display.",
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
     singleton = models.BooleanField(default=True, editable=False, unique=True)
 
@@ -61,6 +94,36 @@ class AppSettings(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(singleton=True)
         return obj
+
+    def clean(self):
+        super().clean()
+
+        # Regla: offset < window (si window=10, offset puede ser 0..9)
+        if self.payment_window_days is None or self.payment_window_days <= 0:
+            raise ValidationError({"payment_window_days": "payment_window_days debe ser mayor a 0."})
+
+        # CANÓNICO (UI actual + serializer)
+        early = self.client_expiration_offset_days
+        if early is not None and early >= self.payment_window_days:
+            raise ValidationError(
+                {
+                    "client_expiration_offset_days": (
+                        "El vencimiento visible (client_expiration_offset_days) debe ser menor que payment_window_days."
+                    )
+                }
+            )
+
+        # LEGACY (si alguien lo usa por error/compat)
+        legacy = self.payment_due_offset_days
+        if legacy is not None and legacy >= self.payment_window_days:
+            raise ValidationError(
+                {
+                    "payment_due_offset_days": (
+                        "payment_due_offset_days debe ser menor que payment_window_days."
+                    )
+                }
+            )
+
 
 
 class Announcement(models.Model):

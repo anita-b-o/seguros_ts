@@ -1,0 +1,181 @@
+/* =========================
+   Admin Home
+   ========================= */
+
+.admin-home {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.admin-home__title {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.admin-home__subtitle {
+  color: #666;
+  margin-bottom: 24px;
+}
+
+/* =========================
+   Tabs
+   ========================= */
+
+.admin-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #ddd;
+  margin-bottom: 24px;
+}
+
+.admin-tab {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  color: #555;
+  border-bottom: 2px solid transparent;
+}
+
+.admin-tab:hover {
+  color: #111;
+}
+
+.admin-tab.is-active {
+  color: #0d47a1;
+  border-bottom-color: #0d47a1;
+  font-weight: 600;
+}
+
+/* =========================
+   Card
+   ========================= */
+
+.admin-card {
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  padding: 20px;
+}
+
+.admin-card + .admin-card {
+  margin-top: 20px;
+}
+
+.admin-card__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+/* =========================
+   Forms
+   ========================= */
+
+.admin-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.admin-form__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-form__row label {
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.admin-form__row input {
+  padding: 9px 10px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  font-size: 0.95rem;
+}
+
+.admin-form__row input:focus {
+  outline: none;
+  border-color: #0d47a1;
+}
+
+/* =========================
+   Actions
+   ========================= */
+
+.admin-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.admin-btn {
+  appearance: none;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  padding: 9px 14px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.admin-btn.primary {
+  background: #0d47a1;
+  color: #fff;
+}
+
+.admin-btn.primary:hover {
+  background: #093372;
+}
+
+.admin-btn.secondary {
+  background: #f5f5f5;
+  border-color: #ccc;
+  color: #333;
+}
+
+.admin-btn.secondary:hover {
+  background: #eaeaea;
+}
+
+.admin-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* =========================
+   Alerts
+   ========================= */
+
+.admin-alert {
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.admin-alert.success {
+  background: #e6f4ea;
+  color: #1e4620;
+  border: 1px solid #b7dfc3;
+}
+
+.admin-alert.error {
+  background: #fdecea;
+  color: #611a15;
+  border: 1px solid #f5c6cb;
+}
+
+/* =========================
+   Preferences grid
+   ========================= */
+
+.admin-preferences {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}

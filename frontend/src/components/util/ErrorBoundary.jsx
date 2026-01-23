@@ -3,27 +3,25 @@ import React from "react";
 export default class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, detail: null };
+    this.state = { hasError: false, error: null };
   }
-  static getDerivedStateFromError(error) { return { hasError: true, detail: error?.message || String(error) }; }
-  componentDidCatch(error, info) { /* log opcional */ }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    // eslint-disable-next-line no-console
+    console.error("UI error:", error, errorInfo);
+  }
 
   render() {
     if (this.state.hasError) {
       return (
-        <section className="section container" style={{maxWidth: 720}}>
-          <h1>Ocurrió un error</h1>
-          <p style={{opacity:.8}}>Intentá recargar la página. Si el problema persiste, contactá soporte.</p>
-          {import.meta.env.DEV && (
-            <details style={{whiteSpace:"pre-wrap", background:"#fafafa", border:"1px solid #eee", padding:12, borderRadius:8}}>
-              <summary>Detalle técnico</summary>
-              {this.state.detail}
-            </details>
-          )}
-          <button onClick={() => location.reload()} className="btn btn--primary" style={{marginTop:12}}>
-            Recargar
-          </button>
-        </section>
+        <div style={{ padding: 24 }}>
+          <h2>Ocurrió un error inesperado.</h2>
+          <p>Recargá la página. Si el problema persiste, contactá soporte.</p>
+        </div>
       );
     }
     return this.props.children;

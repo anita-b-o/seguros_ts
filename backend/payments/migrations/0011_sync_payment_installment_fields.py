@@ -1,6 +1,11 @@
 from django.db import migrations
 
-from payments.utils import period_from_installment
+
+def _period_from_installment(installment):
+    d = getattr(installment, "period_start_date", None)
+    if not d:
+        return None
+    return d.strftime("%Y%m")
 
 
 def sync_payment_installment_pi(apps, schema_editor):
@@ -9,7 +14,7 @@ def sync_payment_installment_pi(apps, schema_editor):
         installment = getattr(payment, "installment", None)
         if not installment:
             continue
-        expected_period = period_from_installment(installment)
+        expected_period = _period_from_installment(installment)
         expected_amount = installment.amount
         updates = []
         if expected_period and payment.period != expected_period:

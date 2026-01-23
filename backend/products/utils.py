@@ -1,3 +1,4 @@
+# backend/products/utils.py
 import re
 
 
@@ -13,13 +14,10 @@ def parse_coverages_markdown(markdown: str, limit: int = 10):
         if not raw.strip():
             continue
         if raw.lstrip() != raw:
-            # skip indented/nested markers to keep top-level entries only
+            # omitimos indentadas para quedarnos con top-level entries
             continue
         cleaned = raw.strip()
-        if not cleaned:
-            continue
-        cleaned = re.sub(r"^[-•*]+\s*", "", cleaned)
-        cleaned = cleaned.strip()
+        cleaned = re.sub(r"^[-•*]+\s*", "", cleaned).strip()
         if not cleaned:
             continue
         entries.append(cleaned)

@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from payments.models import Payment, Receipt, PaymentWebhookEvent
+from payments.models import BillingPeriod, Payment, Receipt, PaymentWebhookEvent
 from payments.views import (
     _get_mp_webhook_event_id,
     _normalize_payload,
@@ -46,9 +46,19 @@ class MpWebhookIdempotencyTests(APITestCase):
         regenerate_installments(self.policy)
         installment = self.policy.installments.order_by("sequence").first()
         period = f"{date.today().year}{str(date.today().month).zfill(2)}"
+        billing_period = BillingPeriod.objects.create(
+            policy=self.policy,
+            period_start=installment.period_start_date,
+            period_end=installment.period_end_date,
+            due_date_soft=installment.due_date_display,
+            due_date_hard=installment.due_date_real,
+            amount=installment.amount,
+            currency="ARS",
+            status=BillingPeriod.Status.UNPAID,
+        )
         self.payment = Payment.objects.create(
             policy=self.policy,
-            installment=installment,
+            billing_period=billing_period,
             period=period,
             amount=installment.amount,
         )

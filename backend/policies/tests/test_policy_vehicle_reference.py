@@ -1,11 +1,10 @@
 from datetime import date
 
-from django.core.management import call_command
 from django.test import TestCase
 
 from accounts.models import User
 from products.models import Product
-from policies.models import Policy, PolicyVehicle
+from policies.models import Policy
 from policies.serializers import PolicySerializer
 from vehicles.models import Vehicle
 
@@ -34,6 +33,16 @@ class PolicyVehicleReferenceTests(TestCase):
             use="Particular",
             fuel="Nafta",
         )
+        self.vehicle_alt = Vehicle.objects.create(
+            owner=self.user,
+            license_plate="ALT123",
+            vtype="AUTO",
+            brand="Otra",
+            model="Modelo",
+            year=2022,
+            use="Particular",
+            fuel="Nafta",
+        )
         self.foreign_vehicle = Vehicle.objects.create(
             owner=self.other_user,
             license_plate="XYZ888",
@@ -55,34 +64,26 @@ class PolicyVehicleReferenceTests(TestCase):
             "end_date": date.today(),
         }
 
-    def test_serializer_outputs_vehicle_info_from_vehicle_fk(self):
-        policy = Policy.objects.create(
-            user=self.user,
-            number="SC-OUT-1",
-            product=self.product,
-            premium=12000,
-            start_date=date.today(),
-            end_date=date.today(),
-            vehicle=self.vehicle,
-        )
+    def test_serializer_outputs_vehicle_info_from_snapshot(self):
+        data = self._policy_data()
+        data["vehicle_id"] = self.vehicle.id
+        serializer = PolicySerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        policy = serializer.save()
         serialized = PolicySerializer(policy).data
         self.assertEqual(serialized["vehicle"]["plate"], "XYZ999")
         self.assertEqual(serialized["vehicle"]["make"], "Marca")
 
-    def test_serializer_reflects_vehicle_changes(self):
-        policy = Policy.objects.create(
-            user=self.user,
-            number="SC-OUT-2",
-            product=self.product,
-            premium=12000,
-            start_date=date.today(),
-            end_date=date.today(),
-            vehicle=self.vehicle,
-        )
+    def test_snapshot_does_not_change_when_vehicle_updates(self):
+        data = self._policy_data()
+        data["vehicle_id"] = self.vehicle.id
+        serializer = PolicySerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        policy = serializer.save()
         self.vehicle.brand = "Marca Actualizada"
         self.vehicle.save()
         data = PolicySerializer(policy).data
-        self.assertEqual(data["vehicle"]["make"], "Marca Actualizada")
+        self.assertEqual(data["vehicle"]["make"], "Marca")
 
     def test_serializer_rejects_vehicle_from_other_user(self):
         data = self._policy_data()
@@ -105,8 +106,23 @@ class PolicyVehicleReferenceTests(TestCase):
         self.assertIsNotNone(policy.vehicle)
         self.assertEqual(policy.vehicle.owner_id, self.user.id)
         self.assertEqual(policy.vehicle.license_plate, "ABC123")
+        self.assertIsNotNone(policy.legacy_vehicle)
+        self.assertEqual(policy.legacy_vehicle.plate, "ABC123")
 
-    def test_seed_policies_links_vehicles_and_skips_policyvehicle(self):
-        call_command("seed_policies", "--reset")
-        self.assertEqual(PolicyVehicle.objects.count(), 0)
-        self.assertTrue(Policy.objects.filter(vehicle__isnull=False).exists())
+    def test_update_vehicle_id_does_not_overwrite_snapshot_for_active_policy(self):
+        data = self._policy_data()
+        data["vehicle_id"] = self.vehicle.id
+        serializer = PolicySerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        policy = serializer.save()
+
+        update = PolicySerializer(
+            policy,
+            data={"vehicle_id": self.vehicle_alt.id},
+            partial=True,
+        )
+        self.assertTrue(update.is_valid(), update.errors)
+        updated = update.save()
+        updated.refresh_from_db()
+        self.assertEqual(updated.vehicle_id, self.vehicle_alt.id)
+        self.assertEqual(updated.legacy_vehicle.plate, "XYZ999")

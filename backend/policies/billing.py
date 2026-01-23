@@ -42,7 +42,7 @@ def ensure_policy_end_date(policy: Policy) -> bool:
     months = getattr(settings_obj, "default_term_months", 0) or 0
     if months <= 0:
         return False
-    computed = _add_months(policy.start_date, months)
+    computed = _add_months(policy.start_date, max(0, months - 1))
     if not computed:
         return False
     policy.end_date = computed
@@ -92,14 +92,17 @@ def _cycle_dates_for_period(period_start: date, *, payment_window_days: int, dis
     display_offset = max(0, display_offset_days)
 
     payment_window_start = period_start
-    payment_window_end = payment_window_start + timedelta(days=window_days)
-    due_real = payment_window_end
+    period_end = _add_months(period_start, 1) - timedelta(days=1)
+    due_real = payment_window_start + timedelta(days=window_days - 1)
+    if due_real > period_end:
+        due_real = period_end
+    payment_window_end = due_real
     due_display = due_real - timedelta(days=display_offset)
     if due_display < payment_window_start:
         due_display = payment_window_start
 
     return {
-        "period_end": _add_months(period_start, 1) - timedelta(days=1),
+        "period_end": period_end,
         "payment_window_start": payment_window_start,
         "payment_window_end": payment_window_end,
         "due_display": due_display,
@@ -152,7 +155,7 @@ def months_duration_for_policy(policy: Policy) -> int:
     """
     settings_obj = AppSettings.get_solo()
     if policy.start_date and policy.end_date:
-        return _months_between(policy.start_date, policy.end_date)
+        return max(1, _months_between(policy.start_date, policy.end_date) + 1)
     return getattr(settings_obj, "default_term_months", 3) or 3
 
 
@@ -396,8 +399,7 @@ def mark_cycle_installment_paid(
     today: Optional[date] = None,
 ) -> Optional[PolicyInstallment]:
     """
-    Marca la cuota correspondiente al ciclo vigente como pagada y la asocia
-    al Payment recibido. Si no hay cuota del ciclo, toma la primera pendiente.
+    Marca la cuota correspondiente al ciclo vigente como pagada.
     """
     today = today or date.today()
     settings_obj = AppSettings.get_solo()
@@ -413,13 +415,12 @@ def mark_cycle_installment_paid(
         target = qs.filter(status=PolicyInstallment.Status.EXPIRED).order_by("sequence").first()
     if not target:
         return None
-    if payment:
-        if payment.installment_id and payment.installment_id != target.id:
-            raise ValueError("El pago ya está asociado a otra cuota.")
-        if payment.installment_id != target.id:
-            payment.installment = target
-            payment.save(update_fields=["installment"])
-    target.mark_paid(payment=payment, when=timezone.now())
+    if payment and getattr(payment, "billing_period", None):
+        target_start = target.period_start_date
+        payment_start = getattr(payment.billing_period, "period_start", None)
+        if payment_start and target_start and payment_start != target_start:
+            raise ValueError("El pago no coincide con el ciclo de esta cuota.")
+    target.mark_paid(when=timezone.now())
     installments = list(policy.installments.all())
     update_policy_status_from_installments(policy, installments, persist=True)
     return target

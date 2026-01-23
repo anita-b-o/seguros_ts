@@ -1,9 +1,10 @@
 // src/main.jsx
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { Provider } from "react-redux";
+import { store } from "@/app/store";
 import { BrowserRouter } from "react-router-dom";
 import { GoogleOAuthProvider } from "@react-oauth/google";
-import { AuthProvider } from "@/hooks/useAuth";
 import { ToastProvider } from "@/contexts/ToastContext";
 import ErrorBoundary from "@/components/util/ErrorBoundary";
 import AppRoutes from "./routes.jsx";
@@ -18,7 +19,7 @@ const googleEnabled =
   Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
 const appTree = (
-  <AuthProvider>
+  <Provider store={store}>
     <ToastProvider>
       <BrowserRouter>
         <ErrorBoundary>
@@ -26,7 +27,7 @@ const appTree = (
         </ErrorBoundary>
       </BrowserRouter>
     </ToastProvider>
-  </AuthProvider>
+  </Provider>
 );
 
 ReactDOM.createRoot(document.getElementById("root")).render(

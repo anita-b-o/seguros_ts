@@ -1,12 +1,10 @@
 from datetime import date
-from decimal import Decimal
-
 from django.urls import reverse
 from rest_framework.test import APIClient, APITestCase
 from unittest.mock import patch
 
 from accounts.models import User
-from policies.models import Policy, PolicyInstallment
+from policies.models import Policy
 from products.models import Product
 
 
@@ -51,19 +49,6 @@ class PolicyObjectScopeTests(APITestCase):
             end_date=date.today(),
             status="active",
         )
-        self.installment = PolicyInstallment.objects.create(
-            policy=self.policy_a,
-            sequence=1,
-            period_start_date=date.today(),
-            period_end_date=date.today(),
-            payment_window_start=date.today(),
-            payment_window_end=date.today(),
-            due_date_display=date.today(),
-            due_date_real=date.today(),
-            amount=Decimal("1234.56"),
-            status=PolicyInstallment.Status.PENDING,
-        )
-
     def _auth(self, user):
         self.client.force_authenticate(user=user)
 
@@ -88,7 +73,7 @@ class PolicyObjectScopeTests(APITestCase):
     def test_create_preference_requires_scope(self, mk_pref, mk_headers):
         self._auth(self.user_a)
         url = reverse("payments-create-preference", kwargs={"policy_id": self.policy_b.id})
-        response = self.client.post(url, {"installment_id": self.installment.id})
+        response = self.client.post(url, {})
         self.assertEqual(response.status_code, 404)
 
     @patch("payments.views._mp_headers", return_value={"Authorization": "Bearer token"})
@@ -99,6 +84,6 @@ class PolicyObjectScopeTests(APITestCase):
     def test_create_preference_allows_own_policy(self, mk_pref, mk_headers):
         self._auth(self.user_a)
         url = reverse("payments-create-preference", kwargs={"policy_id": self.policy_a.id})
-        response = self.client.post(url, {"installment_id": self.installment.id})
+        response = self.client.post(url, {})
         self.assertEqual(response.status_code, 200)
         self.assertIn("preference_id", response.data)

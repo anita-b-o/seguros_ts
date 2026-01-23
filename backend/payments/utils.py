@@ -127,12 +127,13 @@ def _draw_overlay(c, payment, width, height):
     poliza = getattr(policy, "number", "") or str(getattr(policy, "id", ""))
 
     # Periodo (AAAMM -> MM/AAAA)
-    periodo_raw = getattr(payment, "period", "") or ""
+    period_code = getattr(getattr(payment, "billing_period", None), "period_code", None)
+    periodo_raw = period_code or getattr(payment, "period", "") or ""
     periodo = periodo_raw
     if isinstance(periodo_raw, str) and len(periodo_raw) == 6 and periodo_raw.isdigit():
         periodo = f"{periodo_raw[4:6]}/{periodo_raw[:4]}"
 
-    moneda = getattr(payment, "currency", "") or "PESOS"
+    moneda = getattr(getattr(payment, "billing_period", None), "currency", None) or "PESOS"
     total = float(getattr(payment, "amount", 0.0))
     metodo = getattr(payment, "method", None) or ("MERCADO PAGO" if getattr(payment, "mp_payment_id", "") else "EFECTIVO")
     mp_id = getattr(payment, "mp_payment_id", "")
@@ -232,48 +233,3 @@ def generate_receipt_pdf(payment, template_pdf_rel: str = TEMPLATE_PDF_REL) -> s
     rel_path = f"receipts/{datetime.now():%Y/%m}/receipt_{getattr(payment, 'id', 'tmp')}.pdf"
     return default_storage.save(rel_path, ContentFile(out_buf.getvalue()))
 
-
-STATE_PRIORITY = {"APR": 3, "PEN": 2, "REJ": 1}
-
-
-def _score_payment_for_installment(payment):
-    state_score = STATE_PRIORITY.get(getattr(payment, "state", "") or "", 0)
-    has_mp_preference = bool((getattr(payment, "mp_preference_id", "") or "").strip())
-    created_at = getattr(payment, "created_at")
-    if created_at is None:
-        created_at = timezone.now()
-    return (state_score, has_mp_preference, created_at)
-
-
-def choose_canonical_payment_for_installment(payments):
-    """
-    Determina qué Pago debe ser el único asociado a una cuota cuando hay duplicados.
-    """
-    if not payments:
-        return None
-    return max(payments, key=_score_payment_for_installment)
-
-
-def normalize_duplicate_installment_payments(payments):
-    """
-    Marca como rechazados y deja sin cuota a los pagos extra, conservando solo el canónico.
-    """
-    if not payments:
-        return
-    canonical = choose_canonical_payment_for_installment(payments)
-    for payment in payments:
-        if canonical and payment.pk == canonical.pk:
-            continue
-        payment.installment = None
-        payment.state = "REJ"
-        payment.save(update_fields=["installment", "state"])
-
-
-def period_from_installment(installment):
-    """
-    Derive the YYYYMM period that should match the installment's period_start_date.
-    """
-    start_date = getattr(installment, "period_start_date", None)
-    if not start_date:
-        return None
-    return f"{start_date.year}{str(start_date.month).zfill(2)}"

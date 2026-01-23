@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from payments.models import Payment, Receipt
+from payments.models import BillingPeriod, Payment, Receipt
 from payments.views import _map_status_to_state, _process_mp_webhook_for_payment, _normalize_payload
 from policies.billing import regenerate_installments
 from policies.models import Policy, PolicyInstallment
@@ -38,9 +38,19 @@ class WebhookStateTransitionTests(APITestCase):
         regenerate_installments(self.policy)
         installment = self.policy.installments.order_by("sequence").first()
         period = f"{installment.period_start_date.year}{str(installment.period_start_date.month).zfill(2)}"
+        billing_period = BillingPeriod.objects.create(
+            policy=self.policy,
+            period_start=installment.period_start_date,
+            period_end=installment.period_end_date,
+            due_date_soft=installment.due_date_display,
+            due_date_hard=installment.due_date_real,
+            amount=installment.amount,
+            currency="ARS",
+            status=BillingPeriod.Status.UNPAID,
+        )
         self.payment = Payment.objects.create(
             policy=self.policy,
-            installment=installment,
+            billing_period=billing_period,
             period=period,
             amount=installment.amount,
         )

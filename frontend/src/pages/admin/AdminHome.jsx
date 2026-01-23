@@ -1,274 +1,670 @@
-import { useEffect, useRef, useState } from "react";
-import { listAdminPolicies, getAdminSettings, patchAdminUser, patchAdminSettings } from "@/services";
+// frontend/src/pages/admin/AdminHome.jsx
+import { useEffect, useMemo, useState } from "react";
 import useAuth from "@/hooks/useAuth";
-import LogoutButton from "@/components/auth/LogoutButton";
-import { daysUntil, isPolicyExpiringAfterWindow } from "./policyHelpers";
+import { adminSettingsApi } from "@/services/adminSettingsApi";
+import { accountApi } from "@/services/accountApi";
+import { adminPoliciesApi } from "@/services/adminPoliciesApi";
+import "@/styles/adminHome.css";
+
+function isAdminUser(u) {
+  if (!u) return false;
+  const flag = u.is_admin ?? u.isAdmin ?? u.is_staff ?? u.admin ?? u.role;
+  if (typeof flag === "string") {
+    const s = flag.toLowerCase();
+    if (s === "admin") return true;
+    if (["true", "1", "yes", "si"].includes(s)) return true;
+  }
+  if (typeof flag === "number") return flag === 1;
+  if (typeof flag === "boolean") return flag === true;
+  return u.role === "admin";
+}
+
+function toIntOrEmpty(v) {
+  if (v === "" || v == null) return "";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  return String(Math.trunc(n));
+}
+
+// ===== Contact fallback (mismo shape que ContactSection del Home) =====
+const CONTACT_FALLBACK = {
+  whatsapp: "+54 9 221 000 0000",
+  email: "hola@sancayetano.com",
+  address: "Av. Ejemplo 1234, La Plata, Buenos Aires",
+  map_embed_url:
+    "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3283.798536911205!2d-58.381592984774424!3d-34.603738980460806!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x0%3A0x0!2zMzTCsDM2JzEzLjQiUyA1OMKwMjInNTUuNyJX!5e0!3m2!1ses!2sar!4v1700000000000",
+  schedule: "Lun a Vie 9:00 a 18:00",
+};
+
+function normalizeContactFromSettings(settings) {
+  // tolerante: { contact_info: {...} } o plano
+  const c =
+    settings?.contact_info && typeof settings.contact_info === "object"
+      ? settings.contact_info
+      : settings || {};
+
+  return {
+    whatsapp: c.whatsapp ?? CONTACT_FALLBACK.whatsapp,
+    email: c.email ?? CONTACT_FALLBACK.email,
+    address: c.address ?? CONTACT_FALLBACK.address,
+    map_embed_url: c.map_embed_url ?? CONTACT_FALLBACK.map_embed_url,
+    schedule: c.schedule ?? CONTACT_FALLBACK.schedule,
+  };
+}
+
+function buildContactPatchPayload(settings, contact) {
+  // si el backend maneja contact_info, actualizamos ahí (sin pisar otros settings)
+  const usesNested =
+    settings?.contact_info && typeof settings.contact_info === "object";
+
+  if (usesNested) {
+    return {
+      contact_info: {
+        ...settings.contact_info,
+        whatsapp: contact.whatsapp,
+        email: contact.email,
+        address: contact.address,
+        map_embed_url: contact.map_embed_url,
+        schedule: contact.schedule,
+      },
+    };
+  }
+
+  // fallback: campos planos
+  return {
+    whatsapp: contact.whatsapp,
+    email: contact.email,
+    address: contact.address,
+    map_embed_url: contact.map_embed_url,
+    schedule: contact.schedule,
+  };
+}
 
 export default function AdminHome() {
-  const { user, setSession } = useAuth();
-  const [profile, setProfile] = useState({ email: "" });
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [password, setPassword] = useState("");
-  const [passwordConfirm, setPasswordConfirm] = useState("");
-  const [savingThreshold, setSavingThreshold] = useState(false);
-  const [paymentWindow, setPaymentWindow] = useState(5);
-  const [defaultTerm, setDefaultTerm] = useState(3);
-  const [dueDayDisplay, setDueDayDisplay] = useState(5);
-  const [expiringThresholdDays, setExpiringThresholdDays] = useState(30);
-  const [expiringCount, setExpiringCount] = useState(0);
-  const [adjustmentWindowDays, setAdjustmentWindowDays] = useState(7);
-  const [adjustmentCount, setAdjustmentCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [hasPolicies, setHasPolicies] = useState(false);
-  const [err, setErr] = useState("");
-  const isMounted = useRef(false);
-  const showExpiringAlert = expiringCount > 0 && !loading && hasPolicies;
-  const showAdjustmentAlert = adjustmentCount > 0 && !loading;
+  const { user } = useAuth();
+  const isAdmin = isAdminUser(user);
 
-  useEffect(() => {
-    if (user) {
-      setProfile({
-        email: user.email || "",
-      });
-    }
-  }, [user]);
+  const [tab, setTab] = useState("perfil"); // perfil | preferencias | contacto
 
-  useEffect(() => {
-    isMounted.current = true;
-    loadHomeData();
-    return () => {
-      isMounted.current = false;
+  // ---- PERFIL: change password ----
+  const [currentPass, setCurrentPass] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [newPass2, setNewPass2] = useState("");
+  const [savingPass, setSavingPass] = useState(false);
+  const [passMsg, setPassMsg] = useState("");
+  const [passErr, setPassErr] = useState("");
+
+  // ---- PREFERENCIAS: AppSettings ----
+  const [settings, setSettings] = useState(null);
+  const [loadingSettings, setLoadingSettings] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsErr, setSettingsErr] = useState("");
+  const [settingsMsg, setSettingsMsg] = useState("");
+
+  // ---- CONTACTO: AppSettings(contact_info) ----
+  const [contact, setContact] = useState(CONTACT_FALLBACK);
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactErr, setContactErr] = useState("");
+  const [contactMsg, setContactMsg] = useState("");
+
+  // ---- NOTIFICACIÓN: pólizas en período de ajuste ----
+  const [adjustCount, setAdjustCount] = useState(null); // null = sin cargar
+  const [loadingAdjustCount, setLoadingAdjustCount] = useState(false);
+
+  const form = useMemo(() => {
+    const s = settings || {};
+    return {
+      payment_window_days: toIntOrEmpty(s.payment_window_days),
+      client_expiration_offset_days: toIntOrEmpty(s.client_expiration_offset_days),
+      default_term_months: toIntOrEmpty(s.default_term_months),
+
+      // período de ajuste (en días antes de end_date)
+      policy_adjustment_window_days: toIntOrEmpty(
+        s.policy_adjustment_window_days ?? s.adjustment_window_days
+      ),
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [settings]);
 
-  async function fetchAllPolicies() {
-    const pageSize = 100;
-    let page = 1;
-    const accumulated = [];
-    while (true) {
-      const { data } = await listAdminPolicies({
-        params: { page, page_size: pageSize },
-      });
-      const list = Array.isArray(data?.results)
-        ? data.results
-        : Array.isArray(data)
-        ? data
-        : [];
-      if (!list.length) break;
-      accumulated.push(...list);
-      if (!data?.next) break;
-      page += 1;
-    }
-    return accumulated;
-  }
+  const [paymentWindowDays, setPaymentWindowDays] = useState("");
+  const [clientOffsetDays, setClientOffsetDays] = useState("");
+  const [defaultTermMonths, setDefaultTermMonths] = useState("");
+  const [policyAdjustmentWindowDays, setPolicyAdjustmentWindowDays] = useState("");
 
-  async function loadHomeData() {
-    setErr("");
-    setLoading(true);
-    try {
-      const { data } = await getAdminSettings();
-      const payWindowValue = Number(data?.payment_window_days);
-      const displayValue = Number(data?.payment_due_day_display);
-      const thresholdValue = Number(data?.expiring_threshold_days);
-      const termValue = Number(data?.default_term_months);
+  useEffect(() => {
+    if (!isAdmin) return;
 
-      const windowForCounts = Number.isFinite(payWindowValue) && payWindowValue >= 0 ? payWindowValue : DEFAULT_PAYMENT_WINDOW;
-      const dueDayForCounts = Number.isFinite(displayValue) && displayValue > 0 ? displayValue : DEFAULT_DUE_DAY;
-      const thresholdForCounts = Number.isFinite(thresholdValue) && thresholdValue > 0 ? thresholdValue : DEFAULT_THRESHOLD;
-      if (!isMounted.current) return;
+    // inicializar form cuando llega settings
+    setPaymentWindowDays(form.payment_window_days);
+    setClientOffsetDays(form.client_expiration_offset_days);
+    setDefaultTermMonths(form.default_term_months);
+    setPolicyAdjustmentWindowDays(form.policy_adjustment_window_days);
 
-      if (Number.isFinite(payWindowValue) && payWindowValue >= 0) setPaymentWindow(payWindowValue);
-      if (Number.isFinite(displayValue) && displayValue > 0) setDueDayDisplay(displayValue);
-      if (Number.isFinite(thresholdValue) && thresholdValue > 0) setExpiringThresholdDays(thresholdValue);
-      if (Number.isFinite(termValue) && termValue > 0) setDefaultTerm(termValue);
+    // inicializar contacto desde settings
+    setContact(normalizeContactFromSettings(settings));
 
-      const adjustmentValue = Number(data?.policy_adjustment_window_days);
-      if (Number.isFinite(adjustmentValue) && adjustmentValue >= 0) {
-        setAdjustmentWindowDays(adjustmentValue);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.updated_at, isAdmin]);
+
+  // Cargar contador de pólizas en ajuste al entrar al admin
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    (async () => {
+      setLoadingAdjustCount(true);
+      try {
+        const data = await adminPoliciesApi.adjustmentCount();
+        const n = Number(data?.count);
+        setAdjustCount(Number.isFinite(n) ? n : 0);
+      } catch (e) {
+        setAdjustCount(null);
+      } finally {
+        setLoadingAdjustCount(false);
       }
+    })();
+  }, [isAdmin]);
 
-      const list = await fetchAllPolicies();
-      if (!isMounted.current) return;
-      setHasPolicies(list.length > 0);
-      const count = list.filter((p) =>
-        isPolicyExpiringAfterWindow(p, windowForCounts, dueDayForCounts, thresholdForCounts)
-      ).length;
-      setExpiringCount(count);
-      const adjustmentInWindow = list.filter((p) => {
-        const from = p.adjustment_from;
-        const to = p.adjustment_to;
-        const startDiff = daysUntil(from);
-        const endDiff = daysUntil(to);
-        const inWindow =
-          Number.isFinite(startDiff) && startDiff <= 0 && (!Number.isFinite(endDiff) || endDiff >= 0);
-        const stillActive = daysUntil(p.client_end_date || p.end_date) >= 0;
-        return p.status === "active" && inWindow && stillActive;
-      }).length;
-      setAdjustmentCount(adjustmentInWindow);
-    } catch (e) {
-      if (!isMounted.current) return;
-      setErr(e?.response?.data?.detail || "No se pudo cargar la información.");
-      setExpiringCount(0);
-      setAdjustmentCount(0);
-      setHasPolicies(false);
-    } finally {
-      if (isMounted.current) setLoading(false);
-    }
+  // Cargar settings cuando entro a Preferencias o Contacto
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (tab !== "preferencias" && tab !== "contacto") return;
+
+    (async () => {
+      setLoadingSettings(true);
+      setSettingsErr("");
+      setSettingsMsg("");
+      setContactErr("");
+      setContactMsg("");
+      try {
+        const data = await adminSettingsApi.get();
+        setSettings(data);
+        setContact(normalizeContactFromSettings(data));
+      } catch (e) {
+        setSettings(null);
+        setSettingsErr("No se pudieron cargar las preferencias.");
+        setContact(CONTACT_FALLBACK);
+      } finally {
+        setLoadingSettings(false);
+      }
+    })();
+  }, [tab, isAdmin]);
+
+  if (!isAdmin) {
+    return (
+      <div style={{ padding: 24 }}>
+        <h2>Admin</h2>
+        <p>No tenés permisos para ver esta sección.</p>
+      </div>
+    );
   }
 
-  async function saveProfile(e) {
-    e.preventDefault();
-    if (!user?.id) return;
-    if (password && password !== passwordConfirm) {
-      setErr("Las contraseñas no coinciden.");
+  // --- VALIDACIÓN UI (Preferencias) ---
+  const uiSettingsError = useMemo(() => {
+    const w = Number(paymentWindowDays);
+    const o = Number(clientOffsetDays);
+    const t = Number(defaultTermMonths);
+    const adj = Number(policyAdjustmentWindowDays);
+
+    if (!paymentWindowDays || !clientOffsetDays || !defaultTermMonths || !policyAdjustmentWindowDays) {
+      return "";
+    }
+
+    if (!Number.isFinite(w) || !Number.isFinite(o) || !Number.isFinite(t) || !Number.isFinite(adj)) {
+      return "Ingresá valores numéricos válidos.";
+    }
+
+    if (w < 1) return "payment_window_days debe ser >= 1.";
+    if (o < 0) return "client_expiration_offset_days debe ser >= 0.";
+    if (o >= w) return "client_expiration_offset_days debe ser menor que payment_window_days.";
+    if (t < 1) return "default_term_months debe ser >= 1.";
+    if (adj < 1) return "policy_adjustment_window_days debe ser >= 1.";
+    if (adj > 365) return "policy_adjustment_window_days parece demasiado alto (máx 365).";
+
+    return "";
+  }, [
+    paymentWindowDays,
+    clientOffsetDays,
+    defaultTermMonths,
+    policyAdjustmentWindowDays,
+  ]);
+
+  const canSaveSettings = useMemo(() => {
+    if (savingSettings || loadingSettings) return false;
+
+    if (!paymentWindowDays || !clientOffsetDays || !defaultTermMonths || !policyAdjustmentWindowDays) {
+      return false;
+    }
+    if (uiSettingsError) return false;
+
+    return true;
+  }, [
+    savingSettings,
+    loadingSettings,
+    paymentWindowDays,
+    clientOffsetDays,
+    defaultTermMonths,
+    policyAdjustmentWindowDays,
+    uiSettingsError,
+  ]);
+
+  const onSaveSettings = async () => {
+    setSettingsErr("");
+    setSettingsMsg("");
+
+    if (uiSettingsError) {
+      setSettingsErr(uiSettingsError);
       return;
     }
-    setSavingProfile(true);
-    setErr("");
-    try {
-      const payload = { email: profile.email };
-      if (password) payload.password = password;
-      const { data } = await patchAdminUser(user.id, payload);
-      setSession({ user: data ? { ...user, ...data } : user });
-      setPassword("");
-      setPasswordConfirm("");
-    } catch (e2) {
-      setErr(e2?.response?.data?.detail || "No se pudo guardar el perfil.");
-    } finally {
-      setSavingProfile(false);
-    }
-  }
 
-  async function savePrefs() {
-    setSavingThreshold(true);
-    setErr("");
+    setSavingSettings(true);
     try {
-      await patchAdminSettings({
-        payment_window_days: paymentWindow,
-        payment_due_day_display: dueDayDisplay,
-        expiring_threshold_days: expiringThresholdDays,
-        default_term_months: defaultTerm,
-        policy_adjustment_window_days: adjustmentWindowDays,
-      });
-      await loadHomeData();
-    } catch (e2) {
-      setErr(e2?.response?.data?.detail || "No se pudo guardar las preferencias.");
+      const payload = {
+        payment_window_days: Number(paymentWindowDays),
+        client_expiration_offset_days: Number(clientOffsetDays),
+        default_term_months: Number(defaultTermMonths),
+        policy_adjustment_window_days: Number(policyAdjustmentWindowDays),
+      };
+
+      const data = await adminSettingsApi.patch(payload);
+      setSettings(data);
+      setSettingsMsg("Preferencias actualizadas.");
+    } catch (e) {
+      setSettingsErr("No se pudieron guardar las preferencias.");
     } finally {
-      setSavingThreshold(false);
+      setSavingSettings(false);
     }
-  }
+  };
+
+  // --- CONTACTO ---
+  const waLink = useMemo(() => {
+    const digits = String(contact.whatsapp || "").replace(/\D/g, "");
+    return digits ? `https://wa.me/${digits}` : "";
+  }, [contact.whatsapp]);
+
+  const onSaveContact = async () => {
+    setContactErr("");
+    setContactMsg("");
+
+    // validación simple
+    if (!contact.whatsapp || !contact.email || !contact.address) {
+      setContactErr("Completá WhatsApp, email y dirección.");
+      return;
+    }
+
+    setSavingContact(true);
+    try {
+      const payload = buildContactPatchPayload(settings || {}, contact);
+      const data = await adminSettingsApi.patch(payload);
+      setSettings(data);
+      setContact(normalizeContactFromSettings(data));
+      setContactMsg("Datos de contacto actualizados.");
+    } catch (e) {
+      setContactErr("No se pudieron guardar los datos de contacto.");
+    } finally {
+      setSavingContact(false);
+    }
+  };
+
+  const onChangePassword = async (e) => {
+    e.preventDefault();
+    setPassErr("");
+    setPassMsg("");
+
+    if (!currentPass || !newPass) {
+      setPassErr("Completá tu contraseña actual y la nueva.");
+      return;
+    }
+    if (newPass.length < 8) {
+      setPassErr("La nueva contraseña debe tener al menos 8 caracteres.");
+      return;
+    }
+    if (newPass !== newPass2) {
+      setPassErr("La confirmación no coincide.");
+      return;
+    }
+
+    setSavingPass(true);
+    try {
+      await accountApi.changeMyPassword({
+        current_password: currentPass,
+        new_password: newPass,
+      });
+      setPassMsg("Contraseña actualizada.");
+      setCurrentPass("");
+      setNewPass("");
+      setNewPass2("");
+    } catch (err) {
+      setPassErr("No se pudo cambiar la contraseña (verificá la actual).");
+    } finally {
+      setSavingPass(false);
+    }
+  };
+
+  const adjustBannerText = useMemo(() => {
+    if (loadingAdjustCount) return "Revisando pólizas en período de ajuste…";
+    if (adjustCount == null) return "";
+    if (adjustCount <= 0) return "";
+    if (adjustCount === 1) return "Hay 1 póliza en período de ajuste.";
+    return `Hay ${adjustCount} pólizas en período de ajuste.`;
+  }, [loadingAdjustCount, adjustCount]);
 
   return (
-    <section className="section container policies-page">
-      <header className="admin__head">
-        <div>
-          <h1>Inicio admin</h1>
-        </div>
-        <div className="admin__head-actions">
-          <LogoutButton className="btn btn--primary" />
-        </div>
-      </header>
+    <div className="admin-page" style={{ padding: 24 }}>
+      <div style={{ marginBottom: 14 }}>
+        <h1 className="admin-title" style={{ marginBottom: 6 }}>
+          Panel Admin
+        </h1>
+        <p className="admin-sub" style={{ margin: 0 }}>
+          Perfil y preferencias del sistema.
+        </p>
 
-      {showExpiringAlert && (
-        <div className="alert-bar alert-bar--danger">
-          Hay {expiringCount} póliza(s) próximas a vencer.
-        </div>
-      )}
-      {showAdjustmentAlert && (
-        <div className="alert-bar alert-bar--warning">
-          Hay {adjustmentCount} póliza(s) en periodo de ajuste.
-        </div>
-      )}
+        {adjustBannerText ? (
+          <div className="admin-notice" style={{ marginTop: 12 }}>
+            {adjustBannerText}
+          </div>
+        ) : null}
+      </div>
 
-      <div className="card-like admin-home__card mb-12">
-        <h3 className="heading-tight">Tus datos</h3>
-        <form className="form" onSubmit={saveProfile}>
-          <div className="grid admin-grid--auto-220">
-            <div className="field">
-              <label>Email</label>
-              <input type="email" value={profile.email} onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))} required />
-            </div>
-            <div className="field">
-              <label>Nueva contraseña</label>
+      {/* Tabs */}
+      <div className="admin-tabs" style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+        <button
+          type="button"
+          className={tab === "perfil" ? "btn-primary" : "btn-secondary"}
+          onClick={() => setTab("perfil")}
+        >
+          Perfil
+        </button>
+        <button
+          type="button"
+          className={tab === "preferencias" ? "btn-primary" : "btn-secondary"}
+          onClick={() => setTab("preferencias")}
+        >
+          Preferencias
+        </button>
+        <button
+          type="button"
+          className={tab === "contacto" ? "btn-primary" : "btn-secondary"}
+          onClick={() => setTab("contacto")}
+        >
+          Contacto
+        </button>
+      </div>
+
+      {/* PERFIL */}
+      {tab === "perfil" ? (
+        <div className="table-card" style={{ padding: 14 }}>
+          <div className="table-head" style={{ marginBottom: 12 }}>
+            <div className="table-title">Tu cuenta</div>
+            <div className="table-muted">Administración de credenciales</div>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div className="info-k">Email</div>
+            <div className="info-v mono">{user?.email || "-"}</div>
+          </div>
+
+          <form onSubmit={onChangePassword}>
+            <label className="form-label">
+              Contraseña actual
               <input
+                className="form-input"
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Dejar en blanco para no cambiarla"
+                value={currentPass}
+                onChange={(e) => setCurrentPass(e.target.value)}
+                autoComplete="current-password"
+                disabled={savingPass}
+                required
               />
-            </div>
-            <div className="field">
-              <label>Confirmar contraseña</label>
+            </label>
+
+            <label className="form-label">
+              Nueva contraseña
               <input
+                className="form-input"
                 type="password"
-                value={passwordConfirm}
-                onChange={(e) => setPasswordConfirm(e.target.value)}
-                placeholder="Repetí la nueva contraseña"
+                value={newPass}
+                onChange={(e) => setNewPass(e.target.value)}
+                autoComplete="new-password"
+                disabled={savingPass}
+                required
               />
+            </label>
+
+            <label className="form-label">
+              Repetir nueva contraseña
+              <input
+                className="form-input"
+                type="password"
+                value={newPass2}
+                onChange={(e) => setNewPass2(e.target.value)}
+                autoComplete="new-password"
+                disabled={savingPass}
+                required
+              />
+            </label>
+
+            {passErr ? <div className="admin-alert">{passErr}</div> : null}
+            {passMsg ? (
+              <div className="admin-alert" style={{ opacity: 0.9 }}>
+                {passMsg}
+              </div>
+            ) : null}
+
+            <div className="modal-actions" style={{ marginTop: 10 }}>
+              <button className="btn-primary" type="submit" disabled={savingPass}>
+                {savingPass ? "Guardando…" : "Cambiar contraseña"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {/* PREFERENCIAS */}
+      {tab === "preferencias" ? (
+        <div className="table-card" style={{ padding: 14 }}>
+          <div className="table-head" style={{ marginBottom: 12 }}>
+            <div className="table-title">Preferencias de pólizas</div>
+            <div className="table-muted">
+              {loadingSettings ? "Cargando…" : "Configuración global"}
             </div>
           </div>
-          <div className="actions actions--end">
-            <button className="btn btn--primary" type="submit" disabled={savingProfile}>
-              {savingProfile ? "Guardando…" : "Guardar datos"}
+
+          {settingsErr ? <div className="admin-alert">{settingsErr}</div> : null}
+          {settingsMsg ? (
+            <div className="admin-alert" style={{ opacity: 0.9 }}>
+              {settingsMsg}
+            </div>
+          ) : null}
+
+          <label className="form-label">
+            payment_window_days (días de período de pago)
+            <input
+              className="form-input"
+              value={paymentWindowDays}
+              onChange={(e) => setPaymentWindowDays(toIntOrEmpty(e.target.value))}
+              disabled={loadingSettings || savingSettings}
+              inputMode="numeric"
+              placeholder="Ej: 10"
+            />
+            <div className="info-hint">
+              Cantidad de días que dura el período de pago (define el cycle_end real).
+            </div>
+          </label>
+
+          <label className="form-label">
+            client_expiration_offset_days (vencimiento visible)
+            <input
+              className={`form-input ${uiSettingsError ? "is-invalid" : ""}`}
+              value={clientOffsetDays}
+              onChange={(e) => setClientOffsetDays(toIntOrEmpty(e.target.value))}
+              disabled={loadingSettings || savingSettings}
+              inputMode="numeric"
+              placeholder="Ej: 3"
+            />
+            <div className="info-hint">
+              Días antes del vencimiento real en los que vence “para el cliente”. Debe ser menor que payment_window_days.
+            </div>
+            {uiSettingsError ? <div className="field-err">{uiSettingsError}</div> : null}
+          </label>
+
+          <label className="form-label">
+            default_term_months (meses de vigencia por defecto)
+            <input
+              className="form-input"
+              value={defaultTermMonths}
+              onChange={(e) => setDefaultTermMonths(toIntOrEmpty(e.target.value))}
+              disabled={loadingSettings || savingSettings}
+              inputMode="numeric"
+              placeholder="Ej: 3"
+            />
+            <div className="info-hint">Duración por defecto de una vigencia nueva o renovada.</div>
+          </label>
+
+          <label className="form-label">
+            policy_adjustment_window_days (período de ajuste)
+            <input
+              className="form-input"
+              value={policyAdjustmentWindowDays}
+              onChange={(e) => setPolicyAdjustmentWindowDays(toIntOrEmpty(e.target.value))}
+              disabled={loadingSettings || savingSettings}
+              inputMode="numeric"
+              placeholder="Ej: 5"
+            />
+            <div className="info-hint">
+              Días antes de finalizar la vigencia en los que la póliza entra en “período de ajuste”.
+            </div>
+          </label>
+
+          <div className="modal-actions" style={{ marginTop: 10 }}>
+            <button
+              className="btn-primary"
+              type="button"
+              onClick={onSaveSettings}
+              disabled={!canSaveSettings}
+            >
+              {savingSettings ? "Guardando…" : "Guardar preferencias"}
             </button>
           </div>
-        </form>
-      </div>
+        </div>
+      ) : null}
 
-      <div className="card-like admin-home__card mb-12">
-        <h3 className="heading-tight">Preferencias</h3>
-        <div className="admin-home__prefs">
-        {[{
-          label: "Duración de la póliza (en meses)",
-          helper: "Define cuántos meses dura una póliza desde su fecha de inicio.",
-          value: defaultTerm,
-          onChange: (e) => setDefaultTerm(Number(e.target.value)),
-          options: [1, 3, 6, 12].map((n) => ({ value: n, label: `${n} mes${n === 1 ? "" : "es"}` })),
-        }, {
-          label: "Duración del período de pago (en días)",
-          helper: "Cantidad de días disponibles para pagar cada cuota desde el inicio del período mensual.",
-          value: paymentWindow,
-          onChange: (e) => setPaymentWindow(Number(e.target.value)),
-          options: [0, 3, 5, 7, 10, 15].map((n) => ({ value: n, label: `${n} día${n === 1 ? "" : "s"}` })),
-        }, {
-          label: "Día de vencimiento visible para el cliente",
-          helper: "Día del período de pago que se muestra como vencimiento al cliente. No modifica la fecha real de vencimiento.",
-          value: dueDayDisplay,
-          onChange: (e) => setDueDayDisplay(Number(e.target.value)),
-          options: Array.from({ length: 31 }, (_, idx) => idx + 1).map((day) => ({ value: day, label: `${day}` })),
-        }, {
-          label: "Período de ajuste (días antes del fin)",
-          helper: "Define cuántos días antes del fin de la póliza se habilita la ventana de ajuste.",
-          value: adjustmentWindowDays,
-          onChange: (e) => setAdjustmentWindowDays(Number(e.target.value)),
-          options: [0, 3, 5, 7, 10, 14, 21, 30].map((n) => ({ value: n, label: `${n} día${n === 1 ? "" : "s"}` })),
-        }].map(({ label, helper, value, onChange, options }) => (
-          <div
-            key={label}
-            className="admin-home__prefs-row"
-            style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}
-          >
-            <span className="muted" style={{ minWidth: 220 }}>
-              {label}
-            </span>
-            <select value={value} onChange={onChange} disabled={savingThreshold}>
-              {options.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <span className="muted" style={{ flex: 1 }}>
-              {helper}
-            </span>
+      {/* CONTACTO */}
+      {tab === "contacto" ? (
+        <div className="table-card" style={{ padding: 14 }}>
+          <div className="table-head" style={{ marginBottom: 12 }}>
+            <div className="table-title">Datos de contacto (Home)</div>
+            <div className="table-muted">
+              {loadingSettings ? "Cargando…" : "Sección Contacto del sitio público"}
+            </div>
           </div>
-        ))}
-          <div className="actions actions--end admin-home__prefs-actions">
-            <button className="btn btn--primary" onClick={savePrefs} disabled={savingThreshold}>Guardar preferencia</button>
+
+          {contactErr ? <div className="admin-alert">{contactErr}</div> : null}
+          {contactMsg ? (
+            <div className="admin-alert" style={{ opacity: 0.9 }}>
+              {contactMsg}
+            </div>
+          ) : null}
+
+          <label className="form-label">
+            WhatsApp
+            <input
+              className="form-input"
+              value={contact.whatsapp}
+              onChange={(e) =>
+                setContact((prev) => ({ ...prev, whatsapp: e.target.value }))
+              }
+              disabled={loadingSettings || savingContact}
+              placeholder="+54 9 221 ..."
+            />
+            {waLink ? (
+              <div className="info-hint">
+                Link:{" "}
+                <a href={waLink} target="_blank" rel="noreferrer">
+                  {waLink}
+                </a>
+              </div>
+            ) : null}
+          </label>
+
+          <label className="form-label">
+            Email
+            <input
+              className="form-input"
+              value={contact.email}
+              onChange={(e) =>
+                setContact((prev) => ({ ...prev, email: e.target.value }))
+              }
+              disabled={loadingSettings || savingContact}
+              placeholder="hola@..."
+            />
+          </label>
+
+          <label className="form-label">
+            Dirección
+            <input
+              className="form-input"
+              value={contact.address}
+              onChange={(e) =>
+                setContact((prev) => ({ ...prev, address: e.target.value }))
+              }
+              disabled={loadingSettings || savingContact}
+              placeholder="Calle, Ciudad, Provincia"
+            />
+          </label>
+
+          <label className="form-label">
+            Horario
+            <input
+              className="form-input"
+              value={contact.schedule}
+              onChange={(e) =>
+                setContact((prev) => ({ ...prev, schedule: e.target.value }))
+              }
+              disabled={loadingSettings || savingContact}
+              placeholder="Lun a Vie 9:00 a 18:00"
+            />
+          </label>
+
+          <label className="form-label">
+            Mapa (embed URL)
+            <textarea
+              className="form-input"
+              style={{ minHeight: 120, resize: "vertical" }}
+              value={contact.map_embed_url}
+              onChange={(e) =>
+                setContact((prev) => ({ ...prev, map_embed_url: e.target.value }))
+              }
+              disabled={loadingSettings || savingContact}
+              placeholder="https://www.google.com/maps/embed?pb=..."
+            />
+            <div className="info-hint">Pegá la URL de “Embed a map” (no el link normal).</div>
+          </label>
+
+          <div style={{ marginTop: 10 }}>
+            <div className="info-k" style={{ marginBottom: 8 }}>
+              Vista previa
+            </div>
+            <iframe
+              src={contact.map_embed_url || CONTACT_FALLBACK.map_embed_url}
+              title="Mapa de la oficina"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              style={{ width: "100%", height: 260, border: 0, borderRadius: 12 }}
+              allowFullScreen
+            />
+          </div>
+
+          <div className="modal-actions" style={{ marginTop: 10 }}>
+            <button
+              className="btn-primary"
+              type="button"
+              onClick={onSaveContact}
+              disabled={loadingSettings || savingContact}
+            >
+              {savingContact ? "Guardando…" : "Guardar contacto"}
+            </button>
           </div>
         </div>
-      </div>
-    </section>
+      ) : null}
+    </div>
   );
 }

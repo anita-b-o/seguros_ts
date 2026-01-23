@@ -26,22 +26,36 @@ class AppSettingsForm(forms.ModelForm):
     class Meta:
         model = AppSettings
         fields = [
+            # ✅ Ventana de pago (duración variable definida por admin)
             "payment_window_days",
-            "payment_due_day_display",
+            # ✅ Vencimiento adelantado (días antes del fin de la ventana)
+            #    Este campo reemplaza el viejo payment_due_day_display
+            "payment_due_offset_days",
+            # ✅ Duración del plan
             "default_term_months",
+            # ✅ Ventana de ajuste (días antes del fin de la póliza)
             "policy_adjustment_window_days",
         ]
         labels = {
             "payment_window_days": "Duración de la ventana de pago (días)",
-            "payment_due_day_display": "Vencimiento visible para el cliente (día dentro del período)",
+            "payment_due_offset_days": "Vencimiento adelantado visible (días antes del fin)",
             "default_term_months": "Duración del plan (meses)",
             "policy_adjustment_window_days": "Período de ajuste antes del fin (días)",
         }
         help_texts = {
-            "payment_window_days": "Cantidad de días que dura la ventana de pago desde el inicio del período mensual (y).",
-            "payment_due_day_display": "Día dentro de la ventana de pago que se muestra al cliente (1..y). No modifica el vencimiento real.",
-            "default_term_months": "Cantidad de meses/cuotas que se generan por defecto cuando la póliza no tiene end_date (x).",
-            "policy_adjustment_window_days": "Cantidad de días previos al fin de la póliza que definen la ventana de ajuste (w).",
+            "payment_window_days": (
+                "Cantidad de días que dura la ventana de pago desde el inicio del período mensual. "
+                "Ej.: si la póliza inicia 15/01 y la ventana es 10 días, el período visible es 15→25."
+            ),
+            "payment_due_offset_days": (
+                "Cuántos días ANTES del último día de la ventana de pago se muestra el vencimiento al cliente. "
+                "Debe ser menor que payment_window_days. "
+                "Ej.: ventana=10 y offset=3 => el cliente ve vencimiento el día 7, pero el real es el día 10."
+            ),
+            "default_term_months": "Cantidad de meses que se generan por defecto para la vigencia del contrato.",
+            "policy_adjustment_window_days": (
+                "Cantidad de días previos al fin de la póliza que definen la ventana de ajuste."
+            ),
         }
 
 
@@ -49,7 +63,7 @@ class AppSettingsForm(forms.ModelForm):
 class AppSettingsAdmin(admin.ModelAdmin):
     list_display = (
         "payment_window_days",
-        "payment_due_day_display",
+        "payment_due_offset_days",
         "default_term_months",
         "policy_adjustment_window_days",
         "updated_at",
@@ -57,17 +71,18 @@ class AppSettingsAdmin(admin.ModelAdmin):
     readonly_fields = ("updated_at",)
     form = AppSettingsForm
     fieldsets = (
-        ("Calendario de cobro", {
-            "fields": (
-                "payment_window_days",
-                "payment_due_day_display",
-                "default_term_months",
-                "policy_adjustment_window_days",
-            ),
-        }),
-        ("Auditoría", {
-            "fields": ("updated_at",),
-        }),
+        (
+            "Calendario de cobro",
+            {
+                "fields": (
+                    "payment_window_days",
+                    "payment_due_offset_days",
+                    "default_term_months",
+                    "policy_adjustment_window_days",
+                ),
+            },
+        ),
+        ("Auditoría", {"fields": ("updated_at",)}),
     )
 
     def has_add_permission(self, request):

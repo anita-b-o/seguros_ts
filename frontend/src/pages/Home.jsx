@@ -67,7 +67,7 @@ export default function Home() {
   };
 
   return (
-    <main id="main" className="home">
+    <div className="home">
       <Hero />
 
       <PlansSection plans={types} loading={loading} onQuote={handleQuote} />
@@ -78,6 +78,6 @@ export default function Home() {
       )}
       <HowItWorks />
       <ContactSection />
-    </main>
+    </div>
   );
 }

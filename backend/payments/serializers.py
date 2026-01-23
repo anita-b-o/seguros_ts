@@ -4,7 +4,15 @@ from .models import Payment, Receipt
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
-        fields = "__all__"
+        fields = [
+            "id",
+            "state",
+            "billing_period_id",
+            "mp_preference_id",
+            "mp_payment_id",
+            "amount",
+            "period",
+        ]
 
 
 class ReceiptSerializer(serializers.ModelSerializer):

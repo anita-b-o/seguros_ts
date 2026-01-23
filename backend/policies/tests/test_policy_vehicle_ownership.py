@@ -120,6 +120,8 @@ class PolicyVehicleOwnershipAPITests(APITestCase):
         self.assertEqual(response.status_code, 201)
         policy = Policy.objects.get(id=response.data["id"])
         self.assertEqual(policy.vehicle.owner_id, policy.user_id)
+        self.assertIsNotNone(policy.legacy_vehicle)
+        self.assertEqual(policy.legacy_vehicle.plate, self.vehicle_a.license_plate)
 
     def test_create_policy_without_user_id_rejects_foreign_vehicle(self):
         self.user_a.is_staff = True

@@ -1,16 +1,14 @@
-from unittest import mock
+from datetime import date, timedelta
 
 from django.test import TestCase
 
-from payments.models import Payment
+from payments.models import BillingPeriod
 from policies.models import Policy
 from policies.serializers import PolicySerializer
 from products.models import Product
-from policies.billing import regenerate_installments
-from datetime import date, timedelta
 
 
-class InstallmentPaymentCacheTests(TestCase):
+class BillingPeriodCacheTests(TestCase):
     def setUp(self):
         self.product = Product.objects.create(
             code="CACHE-TEST",
@@ -22,46 +20,16 @@ class InstallmentPaymentCacheTests(TestCase):
             base_price=14000,
             coverages="",
         )
-        self.start_date = date.today()
-
-    def _create_policy(self) -> Policy:
-        policy = Policy.objects.create(
+        self.policy = Policy.objects.create(
             number="CACHE-1",
             product=self.product,
             premium=14000,
-            start_date=self.start_date,
-            end_date=self.start_date + timedelta(days=90),
+            start_date=date.today() - timedelta(days=1),
+            end_date=date.today() + timedelta(days=90),
             status="active",
         )
-        regenerate_installments(policy)
-        return policy
 
-    def _attach_payment(self, policy: Policy) -> Payment:
-        installment = policy.installments.order_by("sequence").first()
-        period = f"{installment.period_start_date.year}{str(installment.period_start_date.month).zfill(2)}"
-        return Payment.objects.create(
-            policy=policy,
-            installment=installment,
-            period=period,
-            amount=installment.amount,
-        )
-
-    def test_payment_cached_during_serialization(self):
-        policy = self._create_policy()
-        payment = self._attach_payment(policy)
-        call_count = {"value": 0}
-        original_filter = Payment.objects.filter
-
-        def track_filter(*args, **kwargs):
-            call_count["value"] += 1
-            if call_count["value"] > 1:
-                raise AssertionError("PolicyInstallmentSerializer queried payments more than once.")
-            return original_filter(*args, **kwargs)
-
-        with mock.patch.object(Payment.objects, "filter", side_effect=track_filter):
-            data = PolicySerializer(policy).data
-
-        installments = data["installments"]
-        self.assertEqual(len(installments), policy.installments.count())
-        self.assertEqual(installments[0]["payment"], payment.id)
-        self.assertEqual(call_count["value"], 1)
+    def test_serializer_does_not_create_duplicate_periods(self):
+        PolicySerializer(self.policy).data
+        PolicySerializer(self.policy).data
+        self.assertEqual(BillingPeriod.objects.filter(policy=self.policy).count(), 1)

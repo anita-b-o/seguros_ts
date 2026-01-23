@@ -2,13 +2,12 @@ from datetime import date, timedelta
 
 from django.test import TestCase
 
-from policies.models import Policy, PolicyInstallment
+from policies.models import Policy
 from products.models import Product
-from policies.billing import regenerate_installments
-from policies.serializers import PolicySerializer, PolicyInstallmentSerializer
+from policies.serializers import PolicySerializer
 
 
-class InstallmentGetPaymentTests(TestCase):
+class BillingPeriodCurrentSerializerTests(TestCase):
     def setUp(self):
         self.product = Product.objects.create(
             code="GETPAY",
@@ -24,22 +23,13 @@ class InstallmentGetPaymentTests(TestCase):
             number="GETPAY-1",
             product=self.product,
             premium=15000,
-            start_date=date.today(),
+            start_date=date.today() - timedelta(days=5),
             end_date=date.today() + timedelta(days=60),
             status="active",
         )
-        regenerate_installments(self.policy)
 
-    def test_serializer_returns_null_when_payment_unset(self):
+    def test_serializer_returns_current_billing_period(self):
         data = PolicySerializer(self.policy).data
-        installments = data["installments"]
-        self.assertEqual(len(installments), self.policy.installments.count())
-        for installment in installments:
-            self.assertIsNone(installment["payment"])
-
-    def test_get_payment_uses_cached_attribute(self):
-        installment = self.policy.installments.first()
-        installment._payment_id = None
-        serializer = PolicyInstallmentSerializer()
-        payment = serializer.get_payment(installment)
-        self.assertIsNone(payment)
+        billing_period = data.get("billing_period_current")
+        self.assertIsNotNone(billing_period)
+        self.assertEqual(billing_period["period"], date.today().strftime("%Y%m"))

@@ -2,7 +2,6 @@ import hashlib
 import json
 import logging
 import os
-import uuid
 from decimal import Decimal
 
 try:
@@ -14,17 +13,18 @@ from rest_framework import permissions, viewsets
 from rest_framework.decorators import action, api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
 
-from common.models import AppSettings
-from policies.billing import (
-    ADMIN_MANAGED_STATUSES,
-    current_payment_cycle,
-    mark_cycle_installment_paid,
-    refresh_installment_statuses,
-    update_policy_status_from_installments,
-)
-from policies.models import Policy, PolicyInstallment
+from policies.billing import ADMIN_MANAGED_STATUSES
+from policies.models import Policy
 
-from .models import Payment, Receipt, PaymentWebhookEvent
+from .billing import (
+    auto_mark_overdue_periods,
+    assert_is_current_period,
+    ensure_current_billing_period,
+    mark_overdue_and_suspend_if_needed,
+    reactivate_policy_if_applicable,
+    recalc_current_period_amount,
+)
+from .models import BillingPeriod, Payment, Receipt, PaymentWebhookEvent
 from audit.helpers import audit_log, snapshot_entity
 from common import metrics
 from .serializers import PaymentSerializer
@@ -33,7 +33,8 @@ from .utils import generate_receipt_pdf
 from datetime import date
 from django.conf import settings
 from django.urls import reverse
-from django.utils.crypto import get_random_string, constant_time_compare
+from django.utils.crypto import constant_time_compare
+from django.utils import timezone
 from policies.access import get_scoped_policy_or_404
 
 def _env_bool(val):
@@ -41,6 +42,17 @@ def _env_bool(val):
 
 
 logger = logging.getLogger(__name__)
+
+
+ERROR_PERIOD_ALREADY_PAID = "PERIOD_ALREADY_PAID"
+ERROR_PERIOD_OVERDUE_NOT_PAYABLE = "PERIOD_OVERDUE_NOT_PAYABLE"
+ERROR_FUTURE_PERIOD_NOT_PAYABLE = "FUTURE_PERIOD_NOT_PAYABLE"
+ERROR_NO_PAYABLE_PERIOD = "NO_PAYABLE_PERIOD"
+
+
+def _error_response(detail, code, status=409):
+    return Response({"detail": detail, "code": code}, status=status)
+
 
 
 def _authorize_mp_webhook(request):
@@ -90,17 +102,6 @@ def _authorize_mp_webhook(request):
 
     return reject("Firma inválida", 403)
 
-
-
-def _current_payment_window(policy, settings_obj):
-    """
-    Devuelve (inicio, fin) de la ventana de pago vigente o próxima,
-    siguiendo la misma lógica que policies/_policy_timeline.
-    """
-    cycle = current_payment_cycle(policy, settings_obj)
-    if not cycle:
-        return None, None
-    return cycle.get("payment_window_start"), cycle.get("due_real")
 
 
 def _mp_headers():
@@ -191,6 +192,7 @@ def _try_create_mp_webhook_event(payment, event_id, payload_dict):
         )
         return True
     except IntegrityError:
+        transaction.set_rollback(False)
         return False
 
 
@@ -221,7 +223,7 @@ def _process_mp_webhook_for_payment(
             return Response({"detail": "ok"})
 
         locked_payment = (
-            Payment.objects.select_related("policy", "installment")
+            Payment.objects.select_related("policy", "billing_period")
             .select_for_update()
             .get(pk=payment.pk)
         )
@@ -291,22 +293,6 @@ def _process_mp_webhook_for_payment(
 
         locked_payment.mp_payment_id = mp_payment_id or locked_payment.mp_payment_id
 
-        if status_norm == "approved" and not locked_payment.installment_id:
-            logger.warning(
-                "mp_webhook_approved_without_installment",
-                extra={
-                    "payment_id": locked_payment.id,
-                    "policy_id": locked_payment.policy_id,
-                    "mp_payment_id": mp_payment_id,
-                },
-            )
-            return Response(
-                {
-                    "detail": "Webhook aprobado ignorado: el pago no está vinculado a ninguna cuota."
-                },
-                status=409,
-            )
-
         if status_norm == "approved":
             metrics.payments_confirmed_total.inc()
             if policy is None:
@@ -325,20 +311,16 @@ def _process_mp_webhook_for_payment(
                 )
 
             locked_payment.state = "APR"
+            locked_period = None
+            billing_period = locked_payment.billing_period
+            if billing_period:
+                locked_period = BillingPeriod.objects.select_for_update().get(pk=billing_period.pk)
+                if locked_period.status != BillingPeriod.Status.PAID:
+                    locked_period.mark_paid()
+                    reactivate_policy_if_applicable(policy)
+
             locked_payment.save(update_fields=["state", "mp_payment_id"])
             after_snapshot = snapshot_entity(locked_payment)
-
-            installment = locked_payment.installment
-            locked_installment = None
-            if installment:
-                locked_installment = PolicyInstallment.objects.select_for_update().get(pk=installment.pk)
-                already_paid = locked_installment.status == PolicyInstallment.Status.PAID
-                if not already_paid:
-                    locked_installment.mark_paid(payment=locked_payment)
-
-            installments_qs = policy.installments.select_for_update() if policy else PolicyInstallment.objects.none()
-            refresh_installment_statuses(installments_qs, persist=True)
-            update_policy_status_from_installments(policy, installments_qs, persist=True)
 
             mp_auth_code = str(mp_payment_id or "")
             receipt_exists = Receipt.objects.filter(
@@ -372,7 +354,7 @@ def _process_mp_webhook_for_payment(
                     "policy_id": policy.id if policy else None,
                     "mp_payment_id": mp_payment_id,
                     "amount": float(locked_payment.amount),
-                    "installment_id": getattr(locked_installment, "id", None),
+                    "billing_period_id": getattr(locked_period, "id", None),
                 },
             )
             audit_log(
@@ -546,72 +528,64 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 status=403,
             )
 
-        # Explicitly reject legacy charge-based contracts; billing is installment-driven only.
-        if request.data.get("charge_ids"):
-            return Response(
-                {
-                    "detail": "Los `charge_ids` están obsoletos; envía `installment_id`."
-                },
-                status=400,
+        now = timezone.localdate()
+        billing_period = ensure_current_billing_period(policy, now=now)
+        if not billing_period:
+            return _error_response(
+                "No hay un periodo facturable vigente.",
+                ERROR_NO_PAYABLE_PERIOD,
             )
-        installment_id = request.data.get("installment_id")
-        if not installment_id:
-            return Response(
-                {"detail": "`installment_id` requerido para iniciar el pago."},
-                status=400,
-            )
+
         try:
-            installment = PolicyInstallment.objects.select_related("policy").get(id=installment_id)
-        except PolicyInstallment.DoesNotExist:
-            return Response({"detail": "installment_id inválido."}, status=400)
-        if installment.policy_id != policy.id:
-            return Response({"detail": "La cuota no corresponde a esta póliza."}, status=400)
-        if installment.status == PolicyInstallment.Status.PAID or installment.paid_at:
-            logger.warning(
-                "payment_create_preference_blocked_paid_installment",
-                extra={
-                    "policy_id": policy.id,
-                    "installment_id": installment.id,
-                },
-            )
-            return Response(
-                {"detail": "La cuota ya fue pagada y no se puede iniciar otro cobro."},
-                status=409,
+            assert_is_current_period(billing_period, today=now)
+        except ValueError as exc:
+            return _error_response(str(exc), ERROR_FUTURE_PERIOD_NOT_PAYABLE, status=400)
+
+        if billing_period.status == BillingPeriod.Status.PAID:
+            return _error_response(
+                "El periodo ya fue pagado y no se puede iniciar otro cobro.",
+                ERROR_PERIOD_ALREADY_PAID,
             )
 
-        period = None
-        if installment.period_start_date:
-            period = f"{installment.period_start_date.year}{str(installment.period_start_date.month).zfill(2)}"
-        if not period:
-            period = f"{date.today().year}{str(date.today().month).zfill(2)}"
-
-        amount = installment.amount or Decimal("0")
+        amount = billing_period.amount
         if amount <= 0:
             return Response({"detail": "Monto inválido para iniciar el pago."}, status=400)
 
-        headers = _mp_headers()
-
         payment = None
+        locked_period = None
         with transaction.atomic():
-            locked_payment = (
+            locked_period = BillingPeriod.objects.select_for_update().get(pk=billing_period.pk)
+            if locked_period.status == BillingPeriod.Status.PAID:
+                return _error_response(
+                    "El periodo ya fue pagado y no se puede iniciar otro cobro.",
+                    ERROR_PERIOD_ALREADY_PAID,
+                )
+            mark_overdue_and_suspend_if_needed(policy, locked_period, now=now)
+            recalc_current_period_amount(policy, locked_period, now=now)
+            if locked_period.amount <= 0:
+                return Response({"detail": "Monto inválido para iniciar el pago."}, status=400)
+            amount = locked_period.amount
+            period_code = locked_period.period_code
+
+            payment_qs = (
                 Payment.objects.select_for_update()
-                .filter(installment=installment)
+                .filter(policy=policy, billing_period=locked_period)
                 .order_by("-id")
-                .first()
             )
+            locked_payment = payment_qs.first()
             if locked_payment and locked_payment.state == "APR":
                 logger.warning(
                     "payment_create_preference_blocked_existing_apr",
                     extra={
                         "payment_id": locked_payment.id,
                         "policy_id": policy.id,
-                        "installment_id": installment.id,
+                        "billing_period_id": locked_period.id,
                         "user_id": user.id,
                     },
                 )
-                return Response(
-                    {"detail": "Ya existe un pago aprobado para esta cuota; no se puede iniciar otro cobro."},
-                    status=409,
+                return _error_response(
+                    "Ya existe un pago aprobado para este periodo; no se puede iniciar otro cobro.",
+                    ERROR_PERIOD_ALREADY_PAID,
                 )
 
             if locked_payment and locked_payment.state == "REJ":
@@ -622,15 +596,23 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 payment = locked_payment
             elif locked_payment:
                 payment = locked_payment
-                if locked_payment.period != period or locked_payment.amount != amount:
-                    locked_payment.period = period
+                update_fields = []
+                if locked_payment.period != period_code:
+                    locked_payment.period = period_code
+                    update_fields.append("period")
+                if locked_payment.amount != amount:
                     locked_payment.amount = amount
-                    locked_payment.save(update_fields=["period", "amount"])
+                    update_fields.append("amount")
+                if locked_payment.billing_period_id != locked_period.id:
+                    locked_payment.billing_period = locked_period
+                    update_fields.append("billing_period")
+                if update_fields:
+                    locked_payment.save(update_fields=update_fields)
             else:
                 payment = Payment.objects.create(
                     policy=policy,
-                    installment=installment,
-                    period=period,
+                    billing_period=locked_period,
+                    period=period_code,
                     amount=amount,
                 )
                 metrics.payments_created_total.inc()
@@ -643,23 +625,25 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     actor=request.user,
                     extra={
                         "policy_id": policy.id,
-                        "installment_id": installment.id,
+                        "billing_period_id": locked_period.id,
                         "amount": float(amount),
                     },
                 )
+
+        headers = _mp_headers()
         logger.info(
             "payment_create_preference_start",
             extra={
                 "payment_id": payment.id,
                 "policy_id": policy.id,
+                "billing_period_id": getattr(payment.billing_period, "id", None),
+                "period_code": locked_period.period_code,
                 "amount": float(amount),
                 "user_id": user.id,
                 "has_mp_token": bool(headers),
-                "installment_id": installment.id,
             },
         )
 
-        # Si MP no está configurado, permitimos un modo "fake" para no bloquear cobros en demo.
         if not headers:
             if not _mp_fake_payments_allowed():
                 payment.state = "REJ"
@@ -673,7 +657,6 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     },
                     status=503,
                 )
-            # Modo demo: marcamos pago como aprobado y generamos recibo.
             payment.state = "APR"
             payment.mp_preference_id = f"offline-{payment.id}"
             payment.mp_payment_id = "offline"
@@ -684,14 +667,15 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     "payment_id": payment.id,
                     "policy_id": policy.id,
                     "amount": float(amount),
-                    "installment_id": installment.id,
+                    "billing_period_id": getattr(payment.billing_period, "id", None),
                 },
             )
-            installment.mark_paid(payment=payment)
+            locked_period.mark_paid()
+            reactivate_policy_if_applicable(policy)
             receipt = Receipt.objects.create(
                 policy=policy,
                 amount=amount,
-                concept="Pago registrado en modo demo (sin MP)",
+                concept=f"Pago mensual {locked_period.period_code} en modo demo",
                 method="manual",
                 auth_code="offline",
                 next_due=None,
@@ -703,25 +687,24 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 receipt.file.name = rel_path
                 receipt.save(update_fields=["file"])
 
-            # Devolvemos un init_point simulado para que el front no falle al abrir.
             fake_init_point = f"https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id={payment.mp_preference_id}"
             return Response(
                 {
-                    "preference_id": payment.mp_preference_id,
-                    "mp_preference_id": payment.mp_preference_id,
-                    "init_point": fake_init_point,
+                    "billing_period_id": getattr(payment.billing_period, "id", None),
                     "payment_id": payment.id,
+                    "preference_id": payment.mp_preference_id,
+                    "init_point": fake_init_point,
                     "offline": True,
                 }
             )
 
-        # Payload real para MP
+        currency_id = locked_period.currency or "ARS"
         items = [
             {
-                "title": f"Cuota {installment.sequence}",
+                "title": f"Pago mensual {locked_period.period_code}",
                 "quantity": 1,
-                "unit_price": float(installment.amount or 0),
-                "currency_id": "ARS",
+                "unit_price": float(amount),
+                "currency_id": currency_id,
             }
         ]
         notification_url = _mp_notification_url(request)
@@ -731,6 +714,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
             "metadata": {
                 "payment_id": payment.id,
                 "policy_id": policy.id,
+                "billing_period_id": getattr(payment.billing_period, "id", None),
             },
             "statement_descriptor": "SAN CAYETANO",
         }
@@ -767,10 +751,16 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 "policy_id": policy.id,
                 "preference_id": preference_id,
                 "amount": float(amount),
+                "period_code": locked_period.period_code,
             },
         )
 
-        return Response({'preference_id': preference_id, 'mp_preference_id': preference_id, 'init_point': init_point, 'payment_id': payment.id})
+        return Response({
+            "billing_period_id": getattr(payment.billing_period, "id", None),
+            "payment_id": payment.id,
+            "preference_id": preference_id,
+            "init_point": init_point,
+        })
 
     @action(detail=False, methods=['get'], url_path='pending')
     def pending(self, request):
@@ -778,49 +768,50 @@ class PaymentViewSet(viewsets.ModelViewSet):
         if not policy_id:
             return Response({"detail": "policy_id requerido"}, status=400)
         policy = get_scoped_policy_or_404(request, id=policy_id)
-        # Datos mínimos requeridos para generar cargos
         if not getattr(policy, "start_date", None):
-            return Response({"detail": "La póliza no tiene fecha de inicio. Cargá start_date para habilitar los pagos."}, status=400)
+            return Response(
+                {"detail": "La póliza no tiene fecha de inicio. Cargá start_date para habilitar los pagos."},
+                status=400,
+            )
         if getattr(policy, "premium", None) in (None, ""):
-            return Response({"detail": "La póliza no tiene premium definido. Cargá un premio mensual para habilitar los pagos."}, status=400)
-        refresh_installment_statuses(policy.installments.all(), persist=True)
-        unpaid = policy.installments.exclude(status=PolicyInstallment.Status.PAID).order_by("sequence")
-        unpaid_list = list(unpaid)
-        today = date.today()
-        in_window = [
-            inst
-            for inst in unpaid_list
-            if inst.payment_window_start
-            and inst.payment_window_end
-            and inst.payment_window_start <= today <= inst.payment_window_end
-        ]
-        target = in_window[0] if in_window else (unpaid_list[0] if unpaid_list else None)
-        if not target:
+            return Response(
+                {"detail": "La póliza no tiene premium definido. Cargá un premio mensual para habilitar los pagos."},
+                status=400,
+            )
+
+        now = timezone.localdate()
+        period = ensure_current_billing_period(policy, now=now)
+        if not period:
             return Response(
                 {
-                    "installment": None,
-                    "detail": "No hay cuotas pendientes.",
+                    "period": None,
+                    "detail": "No hay periodos pendientes.",
                 }
             )
-        installment_payload = {
-            "installment_id": target.id,
-            "policy_id": target.policy_id,
-            "amount": str(target.amount),
-            "status": target.status,
-            "period_start_date": target.period_start_date,
-            "payment_window_start": target.payment_window_start,
-            "payment_window_end": target.payment_window_end,
-            "due_date_display": target.due_date_display,
-            "due_date_real": target.due_date_real,
+        assert_is_current_period(period, today=now)
+        auto_mark_overdue_periods(policy, period=period, now=now)
+        mark_overdue_and_suspend_if_needed(policy, period, now=now)
+        period.refresh_from_db()
+        period_payload = {
+            "billing_period_id": period.id,
+            "policy_id": policy.id,
+            "amount": str(period.amount),
+            "status": period.status,
+            "period_code": period.period_code,
+            "period": period.period_start,
+            "period_end": period.period_end,
+            "due_soft": period.due_date_soft,
+            "due_hard": period.due_date_hard,
+            "currency": getattr(period, "currency", "ARS"),
         }
-        # Only the next unpaid installment is returned; charge lists were removed with the Charge model.
-        return Response({"installment": installment_payload})
+        return Response({"period": period_payload})
 
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([permissions.AllowAny])
 def mp_webhook(request):
     metrics.webhooks_received_total.inc()
+    event_id = None
     auth = _authorize_mp_webhook(request)
     # Backward compatibility: some deployments returned 2-tuple (ok, detail).
     if isinstance(auth, tuple) and len(auth) == 3:
@@ -911,42 +902,43 @@ def mp_webhook(request):
 def manual_payment(request, policy_id=None):
     policy = get_scoped_policy_or_404(request, id=policy_id)
     admin_user_id = request.user.id if request.user and request.user.is_authenticated else None
-    settings_obj = AppSettings.get_solo()
-    today = date.today()
-    cycle = current_payment_cycle(policy, settings_obj) or {}
-    payment_start = cycle.get("payment_window_start") or getattr(policy, "start_date", None) or today
-    payment_end = cycle.get("due_real") or payment_start
-
-    premium = getattr(policy, "premium", None) or getattr(getattr(policy, "product", None), "base_price", None)
-    if premium in (None, 0, ""):
+    base_amount = getattr(policy, "premium", None) or getattr(getattr(policy, "product", None), "base_price", None)
+    if base_amount in (None, 0, ""):
         return Response({"detail": "La póliza no tiene premio definido para cobrar."}, status=400)
-    period_str = None
-    if payment_end:
-        period_str = f"{payment_end.year}{str(payment_end.month).zfill(2)}"
-    period_str = period_str or f"{today.year}{str(today.month).zfill(2)}"
 
+    now = timezone.localdate()
+    period = ensure_current_billing_period(policy, now=now)
+    if not period:
+        return Response({"detail": "No hay un periodo vigente para cobrar."}, status=400)
+    assert_is_current_period(period, today=now)
+    auto_mark_overdue_periods(policy, period=period, now=now)
+    mark_overdue_and_suspend_if_needed(policy, period, now=now)
+    period.refresh_from_db()
+    period_code = period.period_code
+    amount = period.amount
 
-    existing_payment = Payment.objects.filter(
-        policy=policy,
-        period=period_str,
-        state="APR",
-        mp_payment_id="manual",
-    ).order_by("-id").first()
     def _manual_detail(base):
         policy_status = getattr(policy, "status", "active")
         if policy_status in ADMIN_MANAGED_STATUSES:
             return f"{base} La póliza permanece {policy_status} porque está administrada manualmente."
         return base
 
+    existing_payment = Payment.objects.filter(
+        policy=policy,
+        billing_period=period,
+        state="APR",
+        mp_payment_id="manual",
+    ).order_by("-id").first()
+
     if existing_payment:
         receipt = Receipt.objects.filter(policy=policy, method="manual").order_by("-id").first()
         if not receipt:
             receipt = Receipt.objects.create(
                 policy=policy,
-                amount=premium,
-                concept="Pago manual (reintento)",
+                amount=amount,
+                concept=f"Pago manual (reintento) {period_code}",
                 method="manual",
-                auth_code=f"admin:{request.user.id if request.user.is_authenticated else 'unknown'}",
+                auth_code=f"admin:{admin_user_id or 'unknown'}",
                 next_due=None,
                 date=date.today(),
             )
@@ -955,8 +947,8 @@ def manual_payment(request, policy_id=None):
             extra={
                 "policy_id": policy.id,
                 "admin_user_id": admin_user_id,
-                "period": period_str,
-                "amount": premium,
+                "billing_period_id": existing_payment.billing_period_id,
+                "amount": float(amount),
                 "payment_id": existing_payment.id,
             },
         )
@@ -966,16 +958,23 @@ def manual_payment(request, policy_id=None):
                 "payment_id": existing_payment.id,
                 "receipt_id": receipt.id,
                 "policy_status": policy.status,
+                "billing_period_id": existing_payment.billing_period_id,
             }
         )
 
+    if period.status == BillingPeriod.Status.PAID:
+        return Response({"detail": "El periodo ya fue pagado."}, status=400)
+
     pay_obj = Payment.objects.create(
         policy=policy,
-        period=period_str,
-        amount=premium,
+        billing_period=period,
+        period=period_code,
+        amount=amount,
         state="APR",
         mp_payment_id="manual",
     )
+    period.mark_paid()
+    reactivate_policy_if_applicable(policy)
     audit_log(
         action="manual_payment_created",
         entity_type="Payment",
@@ -985,17 +984,16 @@ def manual_payment(request, policy_id=None):
         actor=request.user,
         extra={
             "policy_id": policy.id,
-            "period": period_str,
-            "amount": float(premium or 0),
+            "billing_period_id": period.id,
+            "amount": float(amount or 0),
         },
     )
-    installment = mark_cycle_installment_paid(policy, payment=pay_obj)
     receipt = Receipt.objects.create(
         policy=policy,
-        amount=premium,
-        concept="Pago manual",
+        amount=amount,
+        concept=f"Pago manual {period_code}",
         method="manual",
-        auth_code=f"admin:{request.user.id if request.user.is_authenticated else 'unknown'}",
+        auth_code=f"admin:{admin_user_id or 'unknown'}",
         next_due=None,
         date=date.today(),
     )
@@ -1011,8 +1009,8 @@ def manual_payment(request, policy_id=None):
         extra={
             "policy_id": policy.id,
             "admin_user_id": admin_user_id,
-            "period": period_str,
-            "amount": premium,
+            "billing_period_id": period.id,
+            "amount": float(amount),
             "payment_id": pay_obj.id,
         },
     )
@@ -1021,7 +1019,7 @@ def manual_payment(request, policy_id=None):
         {
             "detail": _manual_detail("Pago manual registrado."),
             "receipt_id": receipt.id,
-            "installment_id": getattr(installment, "id", None),
             "policy_status": policy.status,
+            "billing_period_id": period.id,
         }
     )

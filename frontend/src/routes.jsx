@@ -1,126 +1,60 @@
-// src/routes.jsx
-import { Routes, Route, Navigate, Outlet } from "react-router-dom";
-import useAuth from "@/hooks/useAuth";
+// src/app/routes.jsx
+import React from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 
-// Layout UI
-import Navbar from "@/components/ui/Navbar";
-import Footer from "@/components/ui/Footer";
-import AnnouncementBar from "@/components/ui/AnnouncementBar";
+import AppLayout from "@/components/layout/AppLayout";
 
-// Páginas públicas
+// Público
 import Home from "@/pages/Home";
-import Quote from "@/pages/Quote";
-import QuoteShare from "@/pages/QuoteShare";
-import Login from "@/pages/Login";
-import Register from "@/pages/Register";
-import Logout from "@/pages/Logout";
-import ResetRequest from "@/pages/ResetRequest";
-import ResetConfirm from "@/pages/ResetConfirm";
+import Login from "@/pages/auth/Login";
+import Register from "@/pages/auth/Register";
 
-// Pólizas
-import PolicyDetail from "@/pages/PolicyDetail";
-import ClaimPolicy from "@/pages/dashboard/ClaimPolicy";
+// Quote
+import QuoteRequest from "@/pages/quote/QuoteRequest";
+import QuoteShared from "@/pages/quote/QuoteShared";
 
-// Dashboard usuario
-import UserDashboardLayout from "@/pages/dashboard/UserDashboardLayout";
-import PolicyOverview from "@/pages/dashboard/PolicyOverview";
-import Payments from "@/pages/dashboard/Payments";
-import Profile from "@/pages/dashboard/Profile";
-
-// Admin
-import AdminLayout from "@/pages/admin/AdminLayout";
+// Admin (según tu árbol REAL)
 import AdminHome from "@/pages/admin/AdminHome";
-import InsuranceTypes from "@/pages/admin/InsuranceTypes";
-import Policies from "@/pages/admin/Policies";
-import Users from "@/pages/admin/Users";
-import ContactInfoAdmin from "@/pages/admin/ContactInfo";
+import Policies from "@/pages/admin/policies/AdminPoliciesPage"; // Ojo: tu admin real está acá
+import AdminUsersPage from "@/pages/admin/users/AdminUsersPage";
+import Products from "@/pages/admin/products/Products";
 
-// -------- Guards --------
-function RequireAuth() {
-  const { user, loading } = useAuth();
-  if (loading) return null;
-  return user ? <Outlet /> : <Navigate to="/login" replace />;
-}
-
-function AdminGate() {
-  const { user } = useAuth();
-  const isAdmin = !!(user?.is_admin || user?.isAdmin || user?.is_staff);
-  return isAdmin ? <Outlet /> : <Navigate to="/dashboard/seguro" replace />;
-}
-
-function UserGate() {
-  const { user } = useAuth();
-  const isAdmin = !!(user?.is_admin || user?.isAdmin || user?.is_staff);
-  return !isAdmin ? <Outlet /> : <Navigate to="/admin" replace />;
-}
-
-// -------- Página 404 --------
-function NotFound() {
+// (Opcional) Si querés mantener la pantalla placeholder
+function Placeholder({ title }) {
   return (
-    <section className="section container">
-      <h1>404</h1>
-      <p>La página que buscás no existe.</p>
-    </section>
+    <div style={{ padding: 24 }}>
+      <h2>{title}</h2>
+      <p>Pantalla en construcción.</p>
+    </div>
   );
 }
 
-// -------- Rutas principales --------
 export default function AppRoutes() {
   return (
-    <>
-      <AnnouncementBar />
-      <Navbar />
-      <main id="main">
-        <Routes>
-          {/* Públicas */}
-          <Route path="/" element={<Home />} />
-          <Route path="/quote" element={<Quote />} />
-          <Route path="/quote/share/:id" element={<QuoteShare />} />
-          <Route path="/quote/share" element={<QuoteShare />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/logout" element={<Logout />} />
-          <Route path="/reset" element={<ResetRequest />} />
-          <Route path="/reset/confirm" element={<ResetConfirm />} />
+    <Routes>
+      <Route element={<AppLayout />}>
+        {/* Público */}
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
 
-          {/* ÁREA PRIVADA */}
-          <Route element={<RequireAuth />}>
-            {/* Pólizas (solo usuarios con sesión) */}
-            <Route path="/policy/:id" element={<PolicyDetail />} />
-            <Route path="/claim-policy" element={<ClaimPolicy />} />
+        {/* Cotizaciones */}
+        <Route path="/quote" element={<QuoteRequest />} />
+        <Route path="/quote/share/:token" element={<QuoteShared />} />
 
-            {/* Usuario */}
-            <Route element={<UserGate />}>
-              <Route path="/dashboard" element={<UserDashboardLayout />}>
-                <Route index element={<PolicyOverview />} />
-                <Route path="seguro" element={<PolicyOverview />} />
-                <Route path="pagos" element={<Payments />} />
-                <Route path="asociar-poliza" element={<ClaimPolicy />} />
-                <Route path="perfil" element={<Profile />} />
-              </Route>
-            </Route>
+        {/* Admin */}
+        <Route path="/admin" element={<Navigate to="/admin/home" replace />} />
+        <Route path="/admin/home" element={<AdminHome />} />
+        <Route path="/admin/policies" element={<Policies />} />
+        <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/admin/products" element={<Products />} />
 
-            {/* Admin */}
-            <Route element={<AdminGate />}>
-              <Route path="/admin" element={<AdminLayout />}>
-                <Route index element={<AdminHome />} />
-                <Route path="seguros" element={<InsuranceTypes />} />
-                <Route path="polizas" element={<Policies />} />
-                <Route path="usuarios" element={<Users />} />
-                <Route path="contacto" element={<ContactInfoAdmin />} />
-                <Route path="inicio" element={<AdminHome />} />
-              </Route>
-            </Route>
-          </Route>
+        {/* Usuario */}
+        <Route path="/dashboard/seguro" element={<Placeholder title="Panel de usuario" />} />
 
-          {/* Compat */}
-          <Route path="/home" element={<Navigate to="/" replace />} />
-
-          {/* 404 */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </main>
-      <Footer />
-    </>
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
   );
 }

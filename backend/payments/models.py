@@ -1,10 +1,9 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
-from policies.models import Policy, PolicyInstallment
-
-from payments.utils import period_from_installment
+from policies.models import Policy
 
 PERIOD_REGEX = r"^(19|20)\d{2}(0[1-9]|1[0-2])$"
 period_validator = RegexValidator(
@@ -13,10 +12,70 @@ period_validator = RegexValidator(
 )
 
 
+class BillingPeriod(models.Model):
+    class Status:
+        UNPAID = "UNPAID"
+        PAID = "PAID"
+        OVERDUE = "OVERDUE"
+
+        CHOICES = [
+            (UNPAID, "No pagado"),
+            (PAID, "Pagado"),
+            (OVERDUE, "Vencido"),
+        ]
+
+    policy = models.ForeignKey(
+        Policy,
+        on_delete=models.CASCADE,
+        related_name="billing_periods",
+    )
+    period_start = models.DateField()
+    period_end = models.DateField()
+    due_date_soft = models.DateField()
+    due_date_hard = models.DateField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default="ARS")
+    status = models.CharField(max_length=10, choices=Status.CHOICES, default=Status.UNPAID, db_index=True)
+    pricing_snapshot = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [["policy", "period_start"]]
+        ordering = ["policy_id", "period_start"]
+        verbose_name = "Periodo de facturación"
+        verbose_name_plural = "Periodos de facturación"
+
+    def __str__(self):
+        period_code = self.period_start.strftime("%Y%m")
+        return f"{self.policy_id} - {period_code}"
+
+    @property
+    def period_code(self):
+        return self.period_start.strftime("%Y%m")
+
+    @property
+    def is_unpaid(self):
+        return self.status == self.Status.UNPAID
+
+    def mark_paid(self):
+        if self.status == self.Status.PAID:
+            return False
+        self.status = self.Status.PAID
+        self.save(update_fields=["status", "updated_at"])
+        return True
+
+
 class Payment(models.Model):
     STATE = (("PEN","Pendiente"), ("APR","Aprobado"), ("REJ","Rechazado"))
 
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name="payments")
+    billing_period = models.ForeignKey(
+        BillingPeriod,
+        on_delete=models.PROTECT,
+        related_name="payments",
+    )
+
     period = models.CharField(
         max_length=6,
         db_index=True,
@@ -24,13 +83,6 @@ class Payment(models.Model):
         help_text="Período AAAAMM (mes entre 01 y 12).",
     )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    installment = models.OneToOneField(
-        "policies.PolicyInstallment",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="payment",
-    )
     state = models.CharField(max_length=3, choices=STATE, default="PEN")
     mp_preference_id = models.CharField(max_length=80, blank=True)
     mp_payment_id = models.CharField(max_length=80, blank=True)
@@ -40,45 +92,23 @@ class Payment(models.Model):
     last_state_change_at = models.DateTimeField(null=True, blank=True)
     last_state_change_reason = models.CharField(max_length=128, null=True, blank=True)
 
-    def _sync_from_installment(self):
-        instal = getattr(self, "installment", None)
-        if not instal:
-            return False
-        expected_period = period_from_installment(instal)
-        expected_amount = instal.amount
-        changed = False
-        if expected_period and self.period != expected_period:
-            self.period = expected_period
-            changed = True
-        if expected_amount is not None and self.amount != expected_amount:
-            self.amount = expected_amount
-            changed = True
-        return changed
-
     def clean(self):
-        """
-        Enforce that linked installments share the same policy, and derive the
-        policy from the installment to keep the relationship tight.
-        """
+        if not self.billing_period_id:
+            raise ValidationError({"billing_period": "Debe asociarse un periodo de facturación vigente."})
         super().clean()
-        if not self.installment_id:
-            return
-        try:
-            installment = self.installment
-        except PolicyInstallment.DoesNotExist:
-            return
-        derived_policy_id = installment.policy_id
-        if self.policy_id and self.policy_id != derived_policy_id:
+        if self.billing_period_id and self.policy_id and self.billing_period.policy_id != self.policy_id:
             raise ValidationError(
                 {
-                    "policy": "Debe coincidir con la póliza del vencimiento asociado al pago."
+                    "policy": "Debe coincidir con la póliza del periodo de facturación asociado al pago."
                 }
             )
-        self.policy = installment.policy
+        if self.billing_period_id:
+            self.policy = self.billing_period.policy
 
     def save(self, *args, **kwargs):
-        # Keep the payment's metadata aligned with the installment whenever it's linked.
-        self._sync_from_installment()
+        if self.billing_period_id:
+            self.period = self.billing_period.period_code
+            self.amount = self.billing_period.amount
         self.full_clean(validate_unique=False)
 
         state_changed = False
@@ -95,8 +125,6 @@ class Payment(models.Model):
         if state_changed:
             self.last_state_change_at = timezone.now()
 
-        self._sync_from_installment()
-
         save_kwargs = dict(kwargs)
         update_fields = save_kwargs.get("update_fields")
         if state_changed and update_fields is not None:
@@ -107,9 +135,13 @@ class Payment(models.Model):
         super().save(*args, **save_kwargs)
 
     class Meta:
-        # The equality between policy and installment.policy can only be guaranteed
-        # at the application layer via Payment.clean.
-        pass
+        constraints = [
+            models.UniqueConstraint(
+                fields=["billing_period"],
+                condition=Q(state="APR"),
+                name="uniq_billing_period_approved",
+            )
+        ]
 
 
 

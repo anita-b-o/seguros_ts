@@ -2,85 +2,46 @@ from datetime import date, timedelta
 
 from django.test import TestCase
 
-from payments.models import Payment
-from policies.billing import mark_cycle_installment_paid, regenerate_installments
-from policies.models import Policy, PolicyInstallment
+from payments.billing import mark_overdue_and_suspend_if_needed
+from payments.models import BillingPeriod
+from policies.models import Policy
 from products.models import Product
 
 
-class MarkCyclePolicyStatusTests(TestCase):
+class BillingPeriodOverduePolicyStatusTests(TestCase):
     def setUp(self):
         self.product = Product.objects.create(
-            code="STATUS-MARK",
-            name="Status Mark Test",
+            code="OVERDUE-TEST",
+            name="Overdue Plan",
             vehicle_type="AUTO",
             plan_type="RC",
             min_year=1990,
             max_year=2100,
-            base_price=12000,
+            base_price=14000,
             coverages="",
         )
-        self.start_date = date.today()
-
-    def _create_policy(self, status: str) -> Policy:
-        policy = Policy.objects.create(
-            number=f"MK-{status}",
+        self.policy = Policy.objects.create(
+            number="OVERDUE-1",
             product=self.product,
-            premium=12000,
-            start_date=self.start_date,
-            end_date=self.start_date + timedelta(days=90),
-            status=status,
+            premium=14000,
+            start_date=date.today() - timedelta(days=40),
+            end_date=date.today() + timedelta(days=90),
+            status="active",
         )
-        self._regenerate(policy)
-        return policy
-
-    def _regenerate(self, policy: Policy):
-        regenerate_installments(policy)
-
-    def _target_installment(self, policy: Policy) -> PolicyInstallment:
-        return policy.installments.order_by("sequence").first()
-
-    def _create_payment(self, policy: Policy, installment: PolicyInstallment) -> Payment:
-        period = f"{installment.period_start_date.year}{str(installment.period_start_date.month).zfill(2)}"
-        return Payment.objects.create(
-            policy=policy,
-            installment=installment,
-            period=period,
-            amount=installment.amount,
+        self.period = BillingPeriod.objects.create(
+            policy=self.policy,
+            period_start=date.today().replace(day=1),
+            period_end=date.today(),
+            due_date_soft=date.today() - timedelta(days=5),
+            due_date_hard=date.today() - timedelta(days=1),
+            amount=14000,
+            currency="ARS",
+            status=BillingPeriod.Status.UNPAID,
         )
 
-    def test_expired_policy_reactivates_after_single_payment(self):
-        policy = self._create_policy("expired")
-        target = self._target_installment(policy)
-        policy.installments.exclude(id=target.id).update(status=PolicyInstallment.Status.PAID)
-        target.status = PolicyInstallment.Status.EXPIRED
-        target.save(update_fields=["status"])
-
-        payment = self._create_payment(policy, target)
-        mark_cycle_installment_paid(policy, payment=payment)
-        policy.refresh_from_db()
-        self.assertEqual(policy.status, "active")
-
-    def test_cancelled_policy_status_unchanged_after_payment(self):
-        policy = self._create_policy("cancelled")
-        target = self._target_installment(policy)
-        target.status = PolicyInstallment.Status.EXPIRED
-        target.save(update_fields=["status"])
-
-        payment = self._create_payment(policy, target)
-        mark_cycle_installment_paid(policy, payment=payment)
-        policy.refresh_from_db()
-        self.assertEqual(policy.status, "cancelled")
-
-    def test_policy_remains_expired_if_other_expired_installments_exist(self):
-        policy = self._create_policy("expired")
-        installments = list(policy.installments.all())
-        for inst in installments:
-            inst.status = PolicyInstallment.Status.EXPIRED
-            inst.save(update_fields=["status"])
-
-        target = installments[0]
-        payment = self._create_payment(policy, target)
-        mark_cycle_installment_paid(policy, payment=payment)
-        policy.refresh_from_db()
-        self.assertEqual(policy.status, "expired")
+    def test_overdue_period_suspends_policy(self):
+        mark_overdue_and_suspend_if_needed(self.policy, self.period, now=date.today())
+        self.policy.refresh_from_db()
+        self.period.refresh_from_db()
+        self.assertEqual(self.policy.status, "suspended")
+        self.assertEqual(self.period.status, BillingPeriod.Status.OVERDUE)

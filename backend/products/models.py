@@ -1,3 +1,4 @@
+# backend/products/models.py
 from django.db import models
 from django.db.models.functions import Lower
 
@@ -10,28 +11,36 @@ def _normalize_code_value(value: str) -> str:
 def _base_code_from_name(name: str) -> str:
     return _normalize_code_value(name) or "PRODUCT"
 
+
 class Product(models.Model):
-    VEHICLE_TYPES = (('AUTO','Auto'), ('MOTO','Moto'), ('COM','Comercial'))
-    PLAN_TYPES = (('RC','Responsabilidad Civil'), ('TC','Terceros Completo'), ('TR','Todo Riesgo'))
+    VEHICLE_TYPES = (("AUTO", "Auto"), ("MOTO", "Moto"), ("COM", "Comercial"))
+    PLAN_TYPES = (("RC", "Responsabilidad Civil"), ("TC", "Terceros Completo"), ("TR", "Todo Riesgo"))
 
     code = models.CharField(max_length=30, null=False, blank=False)
     name = models.CharField(max_length=120)
     subtitle = models.CharField(max_length=200, blank=True)
+
+    # Lista de strings (lo consume el Home como "features")
     bullets = models.JSONField(default=list, blank=True)
-    vehicle_type = models.CharField(max_length=5, choices=VEHICLE_TYPES)
-    plan_type = models.CharField(max_length=2, choices=PLAN_TYPES)
+
+    vehicle_type = models.CharField(max_length=5, choices=VEHICLE_TYPES, default="AUTO")
+    plan_type = models.CharField(max_length=2, choices=PLAN_TYPES, default="TR")
     min_year = models.PositiveIntegerField(default=1995)
     max_year = models.PositiveIntegerField(default=2100)
-    base_price = models.DecimalField(max_digits=10, decimal_places=2)
+    base_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     franchise = models.CharField(max_length=80, blank=True)
-    coverages = models.TextField(help_text='Lista de coberturas en markdown')
+    coverages = models.TextField(blank=True, help_text="Lista de coberturas en markdown")
+
+    # Visible en Home
     published_home = models.BooleanField(default=True)
+    # Activo/inactivo (si está inactivo no lo devolvemos públicamente)
     is_active = models.BooleanField(default=True)
 
+    # Orden para el Home (menor primero)
+    home_order = models.PositiveIntegerField(default=0)
+
     class Meta:
-        constraints = [
-            models.UniqueConstraint(Lower("code"), name="uniq_product_code_lower")
-        ]
+        constraints = [models.UniqueConstraint(Lower("code"), name="uniq_product_code_lower")]
 
     @classmethod
     def normalize_code(cls, value: str) -> str:
