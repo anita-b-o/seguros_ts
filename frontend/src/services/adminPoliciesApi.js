@@ -1,18 +1,33 @@
 // frontend/src/services/adminPoliciesApi.js
 import { api } from "@/api/http";
 
-const BASE = "/admin/policies/policies"; // sin slash final
+const BASE = "/admin/policies/policies"; // SIN slash final
 const detail = (id) => `${BASE}/${id}`;
 
+// helper: arma URL SIN meter "/" antes del "?"
+function withQuery(base, params) {
+  const qs = params?.toString?.() ? params.toString() : "";
+  return qs ? `${base}?${qs}` : `${base}`;
+}
+
 export const adminPoliciesApi = {
-  async list({ page = 1, search = "", only_unassigned = false, in_adjustment = false } = {}) {
+  async list({
+    page = 1,
+    page_size, // opcional
+    search = "",
+    only_unassigned = false,
+    in_adjustment = false,
+    status, // opcional
+  } = {}) {
     const params = new URLSearchParams();
     if (page) params.set("page", String(page));
+    if (page_size) params.set("page_size", String(page_size));
     if (search) params.set("search", String(search).trim());
     if (only_unassigned) params.set("only_unassigned", "true");
     if (in_adjustment) params.set("in_adjustment", "true");
+    if (status) params.set("status", String(status));
 
-    const url = params.toString() ? `${BASE}/?${params.toString()}` : `${BASE}/`;
+    const url = withQuery(BASE, params); // ✅ /admin/policies/policies?page=...
     const { data } = await api.get(url);
     return data;
   },
@@ -22,69 +37,82 @@ export const adminPoliciesApi = {
     params.set("page", String(page));
     params.set("page_size", String(page_size));
 
-    const { data } = await api.get(`${BASE}/deleted/?${params.toString()}`);
+    // backend alias: /policies/deleted (y suele aceptar también /deleted/)
+    const url = withQuery(`${BASE}/deleted`, params); // ✅ /deleted?page=...
+    const { data } = await api.get(url);
     return data;
   },
 
   async get(id) {
-    const { data } = await api.get(`${detail(id)}/`);
+    if (!id) throw new Error("id requerido");
+    // canónico sin slash final
+    const { data } = await api.get(detail(id));
     return data;
   },
 
   async create(payload) {
-    const { data } = await api.post(`${BASE}/`, payload);
+    // canónico sin slash final
+    const { data } = await api.post(BASE, payload);
     return data;
   },
 
   async patch(id, payload) {
-    const { data } = await api.patch(`${detail(id)}/`, payload);
+    if (!id) throw new Error("id requerido");
+    // canónico sin slash final
+    const { data } = await api.patch(detail(id), payload);
     return data;
   },
 
   async remove(id) {
-    await api.delete(`${detail(id)}/`);
+    if (!id) throw new Error("id requerido");
+    // canónico sin slash final
+    await api.delete(detail(id));
     return true;
   },
 
   async restore(id) {
-    const { data } = await api.post(`${detail(id)}/restore/`);
+    if (!id) throw new Error("id requerido");
+    // action
+    const { data } = await api.post(`${detail(id)}/restore`);
     return data;
   },
 
-  // ✅ NUEVO: marcar como abonada (pago manual/admin)
+  // ✅ marcar como abonada (pago manual/admin)
   async markPaid(id) {
-    const { data } = await api.post(`${detail(id)}/mark-paid/`);
+    if (!id) throw new Error("id requerido");
+    const { data } = await api.post(`${detail(id)}/mark-paid`);
     return data;
   },
 
-  async listInsuranceTypes({ page = 1 } = {}) {
+  async listInsuranceTypes({ page = 1, page_size } = {}) {
     const params = new URLSearchParams();
     if (page) params.set("page", String(page));
+    if (page_size) params.set("page_size", String(page_size));
 
-    const base = "/admin/products/insurance-types";
-    const url = params.toString() ? `${base}/?${params.toString()}` : `${base}/`;
-
+    const base = "/admin/products/insurance-types"; // SIN slash final
+    const url = withQuery(base, params); // ✅ /insurance-types?page=...
     const { data } = await api.get(url);
     return data;
   },
 
   async adjustmentCount() {
-    const { data } = await api.get(`${BASE}/adjustment-count/`);
+    const { data } = await api.get(`${BASE}/adjustment-count`);
     return data; // { count: number }
   },
 
   async stats() {
-    const { data } = await api.get(`${BASE}/stats/`);
+    const { data } = await api.get(`${BASE}/stats`);
     return data;
   },
 
-  async listByStatus({ status, page = 1 } = {}) {
+  async listByStatus({ status, page = 1, page_size = 10 } = {}) {
     const params = new URLSearchParams();
     if (page) params.set("page", String(page));
+    if (page_size) params.set("page_size", String(page_size));
     if (status) params.set("status", String(status));
-    const url = `${BASE}/?${params.toString()}`;
+
+    const url = withQuery(BASE, params); // ✅ /policies?status=...&page=...
     const { data } = await api.get(url);
     return data;
   },
-
 };

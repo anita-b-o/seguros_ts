@@ -1,9 +1,12 @@
+# backend/urls.py (o backend/seguros/urls.py)
 import os
+from urllib.parse import urlencode
+
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseRedirect
 from django.shortcuts import redirect
 from django_prometheus import exports
 
@@ -33,101 +36,144 @@ def healthcheck(request):
 
 
 def _env_bool(val):
-    return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on") if val is not None else False
+    return (
+        str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+        if val is not None
+        else False
+    )
+
+
+def _admin_redirect(request):
+    # evita // si ADMIN_URL ya trae slash final
+    target = "/" + str(settings.ADMIN_URL).lstrip("/")
+    return redirect(target, permanent=True)
+
+
+def _redirect_to(path_with_slash: str):
+    """
+    Redirige preservando querystring.
+    Ej: /api/policies?x=1 -> /api/policies/?x=1
+    """
+    def view(request):
+        qs = request.META.get("QUERY_STRING", "")
+        target = path_with_slash + (f"?{qs}" if qs else "")
+        return HttpResponseRedirect(target)
+    return view
 
 
 urlpatterns = [
+    # Prometheus
     path("metrics/", exports.ExportToDjangoView, name="prometheus-metrics-slash"),
     path("metrics", exports.ExportToDjangoView, name="prometheus-metrics"),
 
-    # Admin — configurable por .env
+    # Django admin — configurable por .env
     path(settings.ADMIN_URL, admin.site.urls),
 
     # (Opcional) redirect desde /admin/ → ADMIN_URL
-    path("admin/", lambda r: redirect("/" + settings.ADMIN_URL, permanent=True)),
+    path("admin/", _admin_redirect),
 
     # Healthcheck
     path("healthz/", healthcheck, name="healthcheck"),
     path("healthz", healthcheck, name="healthcheck-noslash"),
 
-    # API common
+    # =========================
+    # API common ✅
+    # CANÓNICO: include CON "/" final
+    # LEGACY: redirect SIN slash -> CON slash
+    # =========================
     path("api/common/", include("common.urls")),
-    path("api/common", include("common.urls")),
+    path("api/common", _redirect_to("/api/common/")),
 
     # lookup legacy
     path("api/users/lookup", deprecated_lookup, name="user-lookup-deprecated"),
     path("api/users/lookup/", deprecated_lookup, name="user-lookup-deprecated-slash"),
 
-    # Accounts
+    # =========================
+    # Accounts ✅
+    # CANÓNICO: include CON "/" final
+    # LEGACY: redirect SIN slash -> CON slash
+    # =========================
     path("api/accounts/", include("accounts.urls")),
-    path("api/accounts", include("accounts.urls")),
+    path("api/accounts", _redirect_to("/api/accounts/")),
 
+    # =========================
     # Auth alias compatible con el frontend
+    # (no es include, así que OK)
+    # =========================
     path("api/auth/login", EmailLoginView.as_view(), name="auth-login"),
     path("api/auth/login/", EmailLoginView.as_view(), name="auth-login-slash"),
+
     path("api/auth/refresh", PublicTokenRefreshView.as_view(), name="auth-refresh"),
     path("api/auth/refresh/", PublicTokenRefreshView.as_view(), name="auth-refresh-slash"),
+
     path("api/auth/logout", LogoutView.as_view(), name="auth-logout"),
     path("api/auth/logout/", LogoutView.as_view(), name="auth-logout-slash"),
+
     path("api/auth/register", RegisterView.as_view(), name="auth-register"),
     path("api/auth/register/", RegisterView.as_view(), name="auth-register-slash"),
+
     path("api/auth/google", GoogleLoginView.as_view(), name="auth-google"),
     path("api/auth/google/", GoogleLoginView.as_view(), name="auth-google-slash"),
+
     path("api/auth/google/status", GoogleLoginStatusView.as_view(), name="auth-google-status"),
     path("api/auth/google/status/", GoogleLoginStatusView.as_view(), name="auth-google-status-slash"),
+
     path("api/auth/password/reset", PasswordResetRequestView.as_view(), name="auth-password-reset"),
     path("api/auth/password/reset/", PasswordResetRequestView.as_view(), name="auth-password-reset-slash"),
+
     path("api/auth/password/reset/confirm", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
     path("api/auth/password/reset/confirm/", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm-slash"),
+
     path("api/auth/onboarding/resend", ResendOnboardingView.as_view(), name="auth-onboarding-resend"),
     path("api/auth/onboarding/resend/", ResendOnboardingView.as_view(), name="auth-onboarding-resend-slash"),
 
-    # Public apps
+    # =========================
+    # Public apps ✅
+    # CANÓNICO: include CON "/" final
+    # LEGACY: redirect SIN slash -> CON slash
+    # =========================
     path("api/products/", include("products.urls")),
-    path("api/products", include("products.urls")),
-    path("api/policies/", include("policies.urls")),
-    path("api/policies", include("policies.urls")),
-    path("api/payments/", include("payments.urls")),
-    path("api/payments", include("payments.urls")),
-    path("api/quotes/", include("quotes.urls")),
-    path("api/quotes", include("quotes.urls")),
-    path("api/vehicles/", include("vehicles.urls")),
-    path("api/vehicles", include("vehicles.urls")),
+    path("api/products", _redirect_to("/api/products/")),
 
-    # Legacy announcements
+    path("api/policies/", include("policies.urls")),
+    path("api/policies", _redirect_to("/api/policies/")),
+
+    path("api/payments/", include("payments.urls")),
+    path("api/payments", _redirect_to("/api/payments/")),
+
+    path("api/quotes/", include("quotes.urls")),
+    path("api/quotes", _redirect_to("/api/quotes/")),
+
+    path("api/vehicles/", include("vehicles.urls")),
+    path("api/vehicles", _redirect_to("/api/vehicles/")),
+
+    # Legacy announcements (views explícitas, ok)
     path("api/announcements/", legacy_announcements_list, name="legacy-announcements-list"),
     path("api/announcements", legacy_announcements_list, name="legacy-announcements-list-noslash"),
     path("api/announcements/<int:pk>/", legacy_announcements_detail, name="legacy-announcements-detail"),
     path("api/announcements/<int:pk>", legacy_announcements_detail, name="legacy-announcements-detail-noslash"),
 
     # =========================
-    # Admin API (lo que espera el front)
+    # Admin API ✅
+    # CANÓNICO: include CON "/" final
+    # LEGACY: redirect SIN slash -> CON slash
     # =========================
-    # policies
     path("api/admin/policies/", include("policies.admin_urls")),
-    path("api/admin/policies", include("policies.admin_urls")),
+    path("api/admin/policies", _redirect_to("/api/admin/policies/")),
 
-    # accounts (users)
     path("api/admin/accounts/", include("accounts.admin_urls")),
-    path("api/admin/accounts", include("accounts.admin_urls")),
+    path("api/admin/accounts", _redirect_to("/api/admin/accounts/")),
 
-    # products (insurance-types)
     path("api/admin/products/", include("products.admin_urls")),
-    path("api/admin/products", include("products.admin_urls")),
+    path("api/admin/products", _redirect_to("/api/admin/products/")),
 
-    # payments (si tu app tiene admin_urls, preferible usarlo; si no, se mantiene payments.urls)
     path("api/admin/payments/", include("payments.urls")),
-    path("api/admin/payments", include("payments.urls")),
+    path("api/admin/payments", _redirect_to("/api/admin/payments/")),
 
-    # Admin settings
+    # Admin settings (views explícitas, ok)
     path("api/admin/settings", AppSettingsView.as_view(), name="admin-settings"),
     path("api/admin/settings/", AppSettingsView.as_view(), name="admin-settings-slash"),
 ]
-
-# Nota: removí duplicados peligrosos:
-# - path("api/admin/", include("accounts.admin_urls"))
-# - path("api/admin", include("accounts.admin_urls"))
-# Porque pisan/ensucian el namespace /api/admin y pueden generar ruteos inesperados.
 
 
 # === Archivos estáticos y media ===
@@ -145,18 +191,18 @@ urlpatterns += [
             {
                 "message": "San Cayetano API 🚗✅",
                 "endpoints": [
-                    "/api/accounts",
-                    "/api/vehicles",
-                    "/api/products",
-                    "/api/policies",
-                    "/api/payments",
-                    "/api/quotes",
+                    "/api/accounts/",
+                    "/api/vehicles/",
+                    "/api/products/",
+                    "/api/policies/",
+                    "/api/payments/",
+                    "/api/quotes/",
                     "/healthz/",
-                    f"/{settings.ADMIN_URL}",
+                    f"/{str(settings.ADMIN_URL).lstrip('/')}",
                     "/api/admin/accounts/users",
                     "/api/admin/policies/policies",
                     "/api/admin/products/insurance-types",
-                    "/api/admin/settings",
+                    "/api/admin/settings/",
                 ],
             },
             status=200,

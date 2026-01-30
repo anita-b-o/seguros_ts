@@ -100,7 +100,12 @@ export default function Navbar() {
   const isActive = (key) => {
     if (key === "cotizar") return pathname.startsWith("/quote");
     if (key === "ingresar") return pathname === "/login" || pathname === "/register";
-    if (key === "panel") return pathname.startsWith("/dashboard");
+
+    // Cliente (dashboard)
+    if (key === "client-home") return pathname === "/dashboard" || pathname === "/dashboard/seguro";
+    if (key === "client-receipts") return pathname.startsWith("/dashboard/receipts");
+    if (key === "client-associate") return pathname.startsWith("/dashboard/associate-policy");
+    if (key === "client-profile") return pathname.startsWith("/dashboard/profile");
 
     // Admin (por secciones)
     if (key === "admin-home") return pathname === "/admin/home";
@@ -146,6 +151,9 @@ export default function Navbar() {
     }
     setOpen(false);
   };
+
+  // Tu router redirige /dashboard -> /dashboard/seguro, así que esto es OK.
+  const clientDashboardHomeTo = "/dashboard";
 
   return (
     <header className="site-header">
@@ -196,74 +204,101 @@ export default function Navbar() {
               }
             }}
           >
-            {/* Público o cliente */}
+            {/* =========================
+                Cliente (no admin)
+               ========================= */}
             {!isAdmin && (
               <>
-                <li>
-                  <Link
-                    to="/#hero"
-                    className={linkClass("inicio")}
-                    onClick={(e) => handleAnchor(e, "hero")}
-                  >
-                    Inicio
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/#planes"
-                    className={linkClass("planes")}
-                    onClick={(e) => handleAnchor(e, "planes")}
-                  >
-                    Ver planes
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/#como-funciona"
-                    className={linkClass("como-funciona")}
-                    onClick={(e) => handleAnchor(e, "como-funciona")}
-                  >
-                    Cómo funciona
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    to="/#contacto"
-                    className={linkClass("contacto")}
-                    onClick={(e) => handleAnchor(e, "contacto")}
-                  >
-                    Contacto
-                  </Link>
-                </li>
-                <li>
-                  <NavLink to="/quote" className={linkClass("cotizar")}>
-                    Cotizar
-                  </NavLink>
-                </li>
+                {/* Si está LOGUEADO: ocultar público y mostrar solo dashboard */}
                 {isLoggedIn ? (
-                  <li>
-                    <NavLink to="/dashboard/seguro" className={linkClass("panel")}>
-                      Mi panel
-                    </NavLink>
-                  </li>
+                  <>
+                    <li>
+                      <NavLink to={clientDashboardHomeTo} className={linkClass("client-home")}>
+                        Mi panel
+                      </NavLink>
+                    </li>
+                    <li>
+                      <NavLink to="/dashboard/receipts" className={linkClass("client-receipts")}>
+                        Comprobantes
+                      </NavLink>
+                    </li>
+                    <li>
+                      <NavLink to="/dashboard/associate-policy" className={linkClass("client-associate")}>
+                        Asociar póliza
+                      </NavLink>
+                    </li>
+                    <li>
+                      <NavLink to="/dashboard/profile" className={linkClass("client-profile")}>
+                        Perfil
+                      </NavLink>
+                    </li>
+                  </>
                 ) : (
-                  <li className="nav__cta">
-                    <NavLink
-                      to="/login"
-                      className={
-                        isActive("ingresar")
-                          ? "btn btn--secondary is-active"
-                          : "btn btn--secondary"
-                      }
-                    >
-                      Ingresar
-                    </NavLink>
-                  </li>
+                  <>
+                    {/* Si NO está logueado: menú público */}
+                    <li>
+                      <Link
+                        to="/#hero"
+                        className={linkClass("inicio")}
+                        onClick={(e) => handleAnchor(e, "hero")}
+                      >
+                        Inicio
+                      </Link>
+                    </li>
+                    <li>
+                      <Link
+                        to="/#planes"
+                        className={linkClass("planes")}
+                        onClick={(e) => handleAnchor(e, "planes")}
+                      >
+                        Ver planes
+                      </Link>
+                    </li>
+                    <li>
+                      <Link
+                        to="/#como-funciona"
+                        className={linkClass("como-funciona")}
+                        onClick={(e) => handleAnchor(e, "como-funciona")}
+                      >
+                        Cómo funciona
+                      </Link>
+                    </li>
+                    <li>
+                      <Link
+                        to="/#contacto"
+                        className={linkClass("contacto")}
+                        onClick={(e) => handleAnchor(e, "contacto")}
+                      >
+                        Contacto
+                      </Link>
+                    </li>
+
+                    <li>
+                      <NavLink to="/quote" className={linkClass("cotizar")}>
+                        Cotizar
+                      </NavLink>
+                    </li>
+
+                    <li className="nav__cta">
+                      <NavLink
+                        to="/login"
+                        className={
+                          isActive("ingresar")
+                            ? "btn btn--secondary is-active"
+                            : "btn btn--secondary"
+                        }
+                      >
+                        Ingresar
+                      </NavLink>
+                    </li>
+                  </>
                 )}
               </>
             )}
 
-            {/* Admin */}
+            {/* =========================
+                Admin
+               ========================= */}
             {isAdmin && (
               <>
                 <li>

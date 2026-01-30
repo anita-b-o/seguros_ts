@@ -10,6 +10,22 @@ const googleEnabled =
   import.meta.env.VITE_ENABLE_GOOGLE === "true" &&
   Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
 
+// Decide a dónde ir después de loguear
+function getPostLoginPath(u) {
+  if (!u) return "/";
+
+  // Adaptá esta parte al shape real de tu /me:
+  // - Django suele traer is_staff / is_superuser
+  // - o un campo role: "admin" | "customer"
+  const isAdmin =
+    u.is_admin === true ||
+    u.is_staff === true ||
+    u.is_superuser === true ||
+    u.role === "admin";
+
+  return isAdmin ? "/admin/home" : "/dashboard/seguro";
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const {
@@ -36,8 +52,10 @@ export default function Login() {
 
   const isBusy = status === "loading";
 
+  // Si ya hay user hidratado, mandarlo a su home según rol
   useEffect(() => {
-    if (user) navigate("/dashboard/seguro", { replace: true });
+    if (!user) return;
+    navigate(getPostLoginPath(user), { replace: true });
   }, [user, navigate]);
 
   useEffect(() => {
@@ -76,7 +94,9 @@ export default function Login() {
 
       const me = await loadMe();
       if (me.meta.requestStatus === "fulfilled") {
-        navigate("/dashboard/seguro", { replace: true });
+        // Preferimos usar la data devuelta por loadMe si existe
+        const resolvedUser = me.payload?.user ?? me.payload ?? user;
+        navigate(getPostLoginPath(resolvedUser), { replace: true });
       }
       return;
     }
@@ -85,7 +105,7 @@ export default function Login() {
     const res = await login({ email, password, remember });
     if (res.meta.requestStatus !== "fulfilled") return;
 
-    // Si el backend respondió 202 (require_otp), no intentamos /me todavía
+    // Si el backend respondió require_otp, no intentamos /me todavía
     if (res.payload?.require_otp || res.payload?.otp_required) {
       setOtpRequired(true);
       return;
@@ -94,7 +114,8 @@ export default function Login() {
     // Si ya hay tokens, hidratamos
     const me = await loadMe();
     if (me.meta.requestStatus === "fulfilled") {
-      navigate("/dashboard/seguro", { replace: true });
+      const resolvedUser = me.payload?.user ?? me.payload ?? user;
+      navigate(getPostLoginPath(resolvedUser), { replace: true });
     }
   };
 
@@ -108,7 +129,8 @@ export default function Login() {
 
     const me = await loadMe();
     if (me.meta.requestStatus === "fulfilled") {
-      navigate("/dashboard/seguro", { replace: true });
+      const resolvedUser = me.payload?.user ?? me.payload ?? user;
+      navigate(getPostLoginPath(resolvedUser), { replace: true });
     }
   };
 

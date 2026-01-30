@@ -1,0 +1,207 @@
+/* src/styles/associatePolicy.css
+   Objetivo: que "Asociar póliza" se vea como "Mi perfil" (dash-*)
+   - mismo borde/sombra/radius
+   - mismos tamaños y espaciados
+   - inputs y botones coherentes con la paleta
+*/
+
+.ap-page {
+  /* el dash-page ya centra y limita */
+}
+
+.ap-head {
+  /* el dash-head ya maneja layout; esto es un pequeño ajuste */
+  margin-bottom: 12px;
+}
+
+.ap-title {
+  /* usa dash-title, esto solo evita saltos raros */
+}
+
+.ap-sub {
+  /* usa dash-sub */
+}
+
+/* Card alineada a estilo dash */
+.ap-card {
+  border: 1px solid rgba(10, 20, 50, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgba(10, 20, 50, 0.08);
+  padding: 16px;
+}
+
+.ap-cardHead {
+  margin-bottom: 12px;
+}
+
+/* Alerts */
+.ap-alert {
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-weight: 650;
+}
+
+.ap-alert-error {
+  background: rgba(190, 0, 0, 0.08);
+  border: 1px solid rgba(190, 0, 0, 0.18);
+}
+
+.ap-alert-ok {
+  background: rgba(15, 163, 106, 0.10);
+  border: 1px solid rgba(15, 163, 106, 0.22);
+  color: rgba(7, 60, 38, 0.95);
+}
+
+/* Form */
+.ap-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ap-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ap-label {
+  /* dash-label ya define font-weight y margin */
+}
+
+/* Input: reusa dash-select base, ajusta “forma” */
+.ap-input {
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid rgba(10, 20, 50, 0.18);
+  background: #fff;
+  padding: 12px 14px;
+  font-size: 16px;
+  outline: none;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.05s ease;
+}
+
+.ap-input::placeholder {
+  color: rgba(12, 22, 40, 0.45);
+  font-weight: 600;
+}
+
+.ap-input:focus {
+  border-color: rgba(11, 47, 109, 0.55);
+  box-shadow: 0 0 0 3px rgba(11, 47, 109, 0.18);
+}
+
+.ap-input.is-error {
+  border-color: rgba(203, 62, 62, 0.65);
+  box-shadow: 0 0 0 3px rgba(203, 62, 62, 0.16);
+}
+
+.ap-help {
+  margin-top: 0;
+}
+
+.ap-error {
+  color: rgba(180, 0, 0, 0.85);
+  font-weight: 700;
+}
+
+/* Actions: coherente con dash-actions */
+.ap-actions {
+  margin-top: 4px;
+}
+
+/* Buttons (look & feel “perfil”) */
+.ap-btn {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(10, 20, 50, 0.18);
+  background: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  transition: transform 0.05s ease, box-shadow 0.2s ease, border-color 0.2s ease,
+    background 0.2s ease, color 0.2s ease;
+}
+
+.ap-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Primario: azul profundo como el panel */
+.ap-btn-primary {
+  background: #0b2f6d;
+  border-color: #0b2f6d;
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(11, 47, 109, 0.18);
+}
+
+.ap-btn-primary:hover {
+  background: #072452;
+  border-color: #072452;
+  box-shadow: 0 14px 28px rgba(11, 47, 109, 0.22);
+}
+
+.ap-btn-primary:active {
+  transform: translateY(1px);
+}
+
+/* Secundario: blanco con borde suave */
+.ap-btn-secondary {
+  background: #ffffff;
+  border-color: rgba(10, 20, 50, 0.16);
+  color: rgba(10, 20, 50, 0.88);
+  box-shadow: 0 2px 8px rgba(10, 20, 50, 0.06);
+}
+
+.ap-btn-secondary:hover {
+  border-color: rgba(11, 47, 109, 0.35);
+  box-shadow: 0 6px 14px rgba(10, 20, 50, 0.10);
+}
+
+/* Ghost para “Mi perfil” */
+.ap-btn-ghost {
+  background: rgba(6, 26, 58, 0.06);
+  border-color: rgba(6, 26, 58, 0.12);
+  color: rgba(6, 26, 58, 0.92);
+}
+
+.ap-btn-ghost:hover {
+  background: rgba(6, 26, 58, 0.10);
+  border-color: rgba(6, 26, 58, 0.18);
+}
+
+/* Link inferior */
+.ap-next {
+  margin-top: 6px;
+}
+
+.ap-link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-weight: 800;
+  color: #0b2f6d;
+  text-decoration: underline;
+}
+
+.ap-link:hover {
+  color: #072452;
+}
+
+/* Responsive */
+@media (max-width: 840px) {
+  .ap-card {
+    padding: 14px;
+  }
+
+  .ap-input {
+    height: 46px;
+  }
+
+  .ap-btn {
+    height: 42px;
+  }
+}

@@ -99,6 +99,7 @@ class PolicySerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+
     product = serializers.PrimaryKeyRelatedField(read_only=True)
     product_id = serializers.PrimaryKeyRelatedField(
         source="product",
@@ -115,7 +116,7 @@ class PolicySerializer(serializers.ModelSerializer):
     payment_start_date = serializers.SerializerMethodField()
     payment_end_date = serializers.SerializerMethodField()
 
-    # ✅ NUEVO/CLAVE: período de ajuste (por settings.policy_adjustment_window_days)
+    # período de ajuste
     adjustment_from = serializers.SerializerMethodField()
     adjustment_to = serializers.SerializerMethodField()
     is_in_adjustment = serializers.SerializerMethodField()
@@ -229,14 +230,9 @@ class PolicySerializer(serializers.ModelSerializer):
     # -------------------------
     def get_has_pending_charge(self, obj):
         period = self._get_current_billing_period(obj)
-        # Si no hay BillingPeriod, NO bloquea visualización: se considera "sin pendiente" en UI.
         return bool(period and period.status != BillingPeriod.Status.PAID)
 
     def get_has_paid_in_window(self, obj):
-        """
-        Pago realizado dentro de la ventana de pago (según timeline calculado por backend).
-        No requiere BillingPeriod.
-        """
         try:
             timeline = self.context.get("timeline_map", {}).get(obj.id, {})
             start = timeline.get("payment_start_date")
@@ -258,9 +254,6 @@ class PolicySerializer(serializers.ModelSerializer):
             return False
 
     def get_billing_status(self, obj):
-        """
-        Preferimos BillingPeriod si existe; si no, el status derivado del Policy (map).
-        """
         period = self._get_current_billing_period(obj)
         if period:
             return period.status
@@ -279,13 +272,6 @@ class PolicySerializer(serializers.ModelSerializer):
         return self.context.get("timeline_map", {}).get(obj.id, {}).get(key)
 
     def _get_adjustment_window(self, obj):
-        """
-        Período de ajuste (por settings.policy_adjustment_window_days):
-
-        Si window=5 y end_date=20 => [15..19] (end_date NO se incluye).
-        1) Si el view ya lo calculó y lo pasó por context (timeline_map), lo usamos.
-        2) Si no, calculamos best-effort usando AppSettings y end_date (sin depender de BillingPeriod).
-        """
         cache = getattr(self, "_adjustment_cache", None)
         if cache is None:
             cache = {}
@@ -332,11 +318,6 @@ class PolicySerializer(serializers.ModelSerializer):
         return cache[key]
 
     def _get_current_billing_period(self, obj):
-        """
-        IMPORTANT:
-        - Admin list: NO debe crear BillingPeriod; usa get_current_billing_period.
-        - Cliente: puede crear/asegurar BillingPeriod (para cobro/suspensión) cuando corresponde.
-        """
         key = obj.pk or id(obj)
         cache = getattr(self, "_billing_period_cache", {})
         if key not in cache:
@@ -359,13 +340,9 @@ class PolicySerializer(serializers.ModelSerializer):
     # Validation + create/update
     # -------------------------
     def validate(self, attrs):
-        """
-        Requerimos datos mínimos para poder facturar y generar cargos.
-        """
         data = super().validate(attrs)
         instance = getattr(self, "instance", None)
 
-        # Evitar updates sobre eliminadas (admin igual puede restaurar)
         if instance is not None and getattr(instance, "is_deleted", False):
             raise ValidationError(
                 {"detail": "No se puede modificar una póliza eliminada. Restaurala primero."}
@@ -437,7 +414,9 @@ class PolicySerializer(serializers.ModelSerializer):
                     license_plate,
                 )
 
-            should_refresh_period = any(k in validated_data for k in ("premium", "start_date", "end_date"))
+            should_refresh_period = any(
+                k in validated_data for k in ("premium", "start_date", "end_date")
+            )
 
             policy = super().update(instance, validated_data)
 
@@ -472,7 +451,9 @@ class PolicySerializer(serializers.ModelSerializer):
         required = ["plate", "make", "model", "year"]
         missing = [field for field in required if not cleaned.get(field)]
         if missing:
-            raise ValidationError({"vehicle": ["Si enviás vehículo, indicá patente, marca, modelo y año."]})
+            raise ValidationError(
+                {"vehicle": ["Si enviás vehículo, indicá patente, marca, modelo y año."]}
+            )
         return cleaned
 
     def _resolve_or_create_vehicle_by_plate(self, user, plate):
@@ -679,36 +660,16 @@ class PolicySerializer(serializers.ModelSerializer):
         return PolicyVehicleSerializer(vehicle).data
 
 
-# agregar cerca del final de PolicySerializer (antes de PolicyClientListSerializer)
 class AdminPolicyCreateSerializer(PolicySerializer):
-    """
-    Serializer para creación/edición desde Admin.
-
-    Reglas:
-    - number: obligatorio al crear; editable.
-    - product_id: opcional
-    - user_id (cliente): opcional
-    - premium (precio): obligatorio
-    - start_date: si no se envía en create, se asume hoy
-    - end_date: no editable; se calcula automáticamente como start_date + 3 meses.
-
-    Regla especial de edición:
-    - Si NO se envía start_date pero se cambia premium:
-      start_date pasa a ser la end_date anterior (rollover) y end_date = start_date + 3 meses.
-    - Si se envía start_date: recalcular end_date = start_date + 3 meses.
-    """
-
     end_date = serializers.DateField(read_only=True)
 
     @staticmethod
     def _add_months(start: date, months: int) -> date:
-        """Suma meses conservando el día; si no existe, usa último día del mes."""
         if months == 0:
             return start
         year = start.year + (start.month - 1 + months) // 12
         month = (start.month - 1 + months) % 12 + 1
         from calendar import monthrange
-
         last_day = monthrange(year, month)[1]
         return date(year, month, min(start.day, last_day))
 
@@ -716,17 +677,15 @@ class AdminPolicyCreateSerializer(PolicySerializer):
         return self._add_months(start_date, 3)
 
     def validate(self, attrs):
-        # Importante: NO usar PolicySerializer.validate() porque exige product.
         data = super(serializers.ModelSerializer, self).validate(attrs)
         instance = getattr(self, "instance", None)
 
-        # Evitar updates sobre eliminadas (admin igual puede restaurar)
         if instance is not None and getattr(instance, "is_deleted", False):
             raise ValidationError(
                 {"detail": "No se puede modificar una póliza eliminada. Restaurala primero."}
             )
 
-        # number obligatorio en create; en update si se envía, se valida/normaliza/unicidad.
+        # number obligatorio en create
         if instance is None:
             raw_number = data.get("number", None)
             if raw_number in (None, ""):
@@ -745,10 +704,14 @@ class AdminPolicyCreateSerializer(PolicySerializer):
             start_date = timezone.localdate()
             data["start_date"] = start_date
 
-        # Si llega end_date por payload, se ignora (no editable desde UI)
+        # end_date no editable
         data.pop("end_date", None)
 
-        self._validate_vehicle_owner_payload(data)
+        # Si admin toca vehículo explícitamente, validamos ownership.
+        touches_vehicle = any(k in data for k in ("vehicle", "vehicle_id", "license_plate"))
+        if touches_vehicle:
+            self._validate_vehicle_owner_payload(data)
+
         return data
 
     def create(self, validated_data):
@@ -758,13 +721,13 @@ class AdminPolicyCreateSerializer(PolicySerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        """
-        Reglas:
-        - Si viene start_date: recalcular end_date.
-        - Si NO viene start_date pero cambia premium: rollover => start_date = end_date anterior; end_date = start_date + 3 meses.
-        - Permitir editar number (si viene): normalizar + unicidad.
-        - user/product opcionales.
-        """
+        # FIX: persistir user SIEMPRE si vino en payload (aunque sea null)
+        # (cuando el request manda "user_id", DRF lo mapea a "user" por source="user")
+        if "user" in validated_data:
+            instance.user = validated_data.pop("user")  # puede ser User o None
+            instance.save(update_fields=["user", "updated_at"])
+            instance.refresh_from_db(fields=["user_id"])
+
         if "number" in validated_data:
             raw_number = validated_data.get("number", None)
             if raw_number in (None, ""):
@@ -870,6 +833,12 @@ class PolicyClientDetailSerializer(serializers.ModelSerializer):
     has_gnc = serializers.SerializerMethodField()
     gnc_amount = serializers.SerializerMethodField()
 
+    # --- COMPAT: mantener "user" como venía (id) ---
+    user = serializers.IntegerField(source="user_id", read_only=True)
+
+    # --- NUEVO: para que el front pueda mostrar el cliente sin romper compat ---
+    user_obj = UserMinimalSerializer(source="user", read_only=True)
+
     class Meta:
         model = Policy
         fields = [
@@ -897,6 +866,7 @@ class PolicyClientDetailSerializer(serializers.ModelSerializer):
             "gnc_amount",
             "claim_code",
             "user",
+            "user_obj",
         ]
 
     def get_client_end_date(self, obj):

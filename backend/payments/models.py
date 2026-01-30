@@ -1,9 +1,12 @@
+# backend/payments/models.py
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+
 from policies.models import Policy
+
 
 PERIOD_REGEX = r"^(19|20)\d{2}(0[1-9]|1[0-2])$"
 period_validator = RegexValidator(
@@ -29,14 +32,27 @@ class BillingPeriod(models.Model):
         on_delete=models.CASCADE,
         related_name="billing_periods",
     )
+
+    # Ventana del período y vencimientos
     period_start = models.DateField()
     period_end = models.DateField()
     due_date_soft = models.DateField()
     due_date_hard = models.DateField()
+
+    # Monto del período (source-of-truth para Payment.amount)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default="ARS")
-    status = models.CharField(max_length=10, choices=Status.CHOICES, default=Status.UNPAID, db_index=True)
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.CHOICES,
+        default=Status.UNPAID,
+        db_index=True,
+    )
+
+    # Snapshot de pricing (premium, tasas, etc.) para auditoría/consistencia
     pricing_snapshot = models.JSONField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -67,9 +83,14 @@ class BillingPeriod(models.Model):
 
 
 class Payment(models.Model):
-    STATE = (("PEN","Pendiente"), ("APR","Aprobado"), ("REJ","Rechazado"))
+    STATE = (
+        ("PEN", "Pendiente"),
+        ("APR", "Aprobado"),
+        ("REJ", "Rechazado"),
+    )
 
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name="payments")
+
     billing_period = models.ForeignKey(
         BillingPeriod,
         on_delete=models.PROTECT,
@@ -82,35 +103,53 @@ class Payment(models.Model):
         validators=[period_validator],
         help_text="Período AAAAMM (mes entre 01 y 12).",
     )
+
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+
     state = models.CharField(max_length=3, choices=STATE, default="PEN")
+
     mp_preference_id = models.CharField(max_length=80, blank=True)
     mp_payment_id = models.CharField(max_length=80, blank=True)
+
     receipt_pdf = models.FileField(upload_to="receipts/", blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
     last_state_change_at = models.DateTimeField(null=True, blank=True)
     last_state_change_reason = models.CharField(max_length=128, null=True, blank=True)
 
     def clean(self):
+        # billing_period es obligatorio por diseño de flujo
         if not self.billing_period_id:
-            raise ValidationError({"billing_period": "Debe asociarse un periodo de facturación vigente."})
+            raise ValidationError(
+                {"billing_period": "Debe asociarse un periodo de facturación vigente."}
+            )
+
         super().clean()
+
+        # Consistencia policy <-> billing_period.policy
         if self.billing_period_id and self.policy_id and self.billing_period.policy_id != self.policy_id:
             raise ValidationError(
                 {
                     "policy": "Debe coincidir con la póliza del periodo de facturación asociado al pago."
                 }
             )
+
+        # Si viene billing_period, fijamos policy automáticamente
         if self.billing_period_id:
             self.policy = self.billing_period.policy
 
     def save(self, *args, **kwargs):
+        # Source-of-truth: BillingPeriod
         if self.billing_period_id:
             self.period = self.billing_period.period_code
             self.amount = self.billing_period.amount
+
+        # Validación: dejamos pasar unique para evitar duplicados por carrera en save()
         self.full_clean(validate_unique=False)
 
+        # Auditoría de cambios de estado
         state_changed = False
         if self.pk:
             prev_state = (
@@ -122,17 +161,20 @@ class Payment(models.Model):
                 state_changed = True
         else:
             state_changed = True
+
         if state_changed:
             self.last_state_change_at = timezone.now()
 
         save_kwargs = dict(kwargs)
         update_fields = save_kwargs.get("update_fields")
+
+        # Si update_fields está limitado, aseguramos persistir last_state_change_at
         if state_changed and update_fields is not None:
             fields = set(update_fields)
             fields.add("last_state_change_at")
             save_kwargs["update_fields"] = fields
 
-        super().save(*args, **save_kwargs)
+        return super().save(*args, **save_kwargs)
 
     class Meta:
         constraints = [
@@ -144,15 +186,18 @@ class Payment(models.Model):
         ]
 
 
-
 class Receipt(models.Model):
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name="receipts")
+
     date = models.DateField(auto_now_add=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
     concept = models.CharField(max_length=120, blank=True)
     method = models.CharField(max_length=30, blank=True)
     auth_code = models.CharField(max_length=80, blank=True)
+
     next_due = models.DateField(null=True, blank=True)
+
     # Legacy receipt fields preserve historical Charge data now that the Charge model has been removed.
     legacy_charge_id = models.IntegerField(
         null=True,
@@ -171,6 +216,7 @@ class Receipt(models.Model):
         blank=True,
         help_text="Legacy Charge due date (if available) for historic receipts. Not part of the billing flow.",
     )
+
     file = models.FileField(upload_to="receipts/", null=True, blank=True)
 
     class Meta:
@@ -191,6 +237,7 @@ class PaymentWebhookEvent(models.Model):
 
     provider = models.CharField(max_length=40, choices=PROVIDER_CHOICES)
     external_event_id = models.CharField(max_length=255)
+
     payment = models.ForeignKey(
         Payment,
         null=True,
@@ -198,6 +245,7 @@ class PaymentWebhookEvent(models.Model):
         on_delete=models.SET_NULL,
         related_name="webhook_events",
     )
+
     received_at = models.DateTimeField(auto_now_add=True)
     raw_payload = models.JSONField(null=True, blank=True)
 

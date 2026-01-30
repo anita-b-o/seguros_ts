@@ -71,7 +71,6 @@ function ListModal({ open, title, subtitle, items, loading, error, onPick, onClo
           </button>
         </div>
 
-        {/* modal-body evita overflow-x */}
         <div className="modal-body" style={{ padding: 12 }}>
           {error ? <div className="admin-alert">{String(error)}</div> : null}
 
@@ -101,15 +100,8 @@ function ListModal({ open, title, subtitle, items, loading, error, onPick, onClo
                       }}
                     >
                       <td className="mono">{it.number}</td>
-                      <td
-                        className="td-action"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          className="btn-link"
-                          type="button"
-                          onClick={() => onPick?.(it)}
-                        >
+                      <td className="td-action" onClick={(e) => e.stopPropagation()}>
+                        <button className="btn-link" type="button" onClick={() => onPick?.(it)}>
                           Abrir
                         </button>
                       </td>
@@ -135,13 +127,12 @@ export default function AdminPoliciesPage() {
   const dispatch = useDispatch();
   const { user } = useAuth();
 
-  const { list, count, page, loadingList, loadingDelete, errorList } = useSelector(
-    (s) => s.adminPolicies
-  );
+  // ✅ Traemos next/previous del slice para controlar paginado real
+  const { list, count, page, loadingList, loadingDelete, errorList, next, previous } =
+    useSelector((s) => s.adminPolicies);
 
   const [openCreate, setOpenCreate] = useState(false);
 
-  // ✅ Ahora "editing" guarda el detalle completo (si lo cargamos)
   const [editing, setEditing] = useState(null);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [editErr, setEditErr] = useState("");
@@ -155,12 +146,11 @@ export default function AdminPoliciesPage() {
   const [errorDeleted, setErrorDeleted] = useState("");
 
   // --- Stats (tarjetas) ---
-  const [stats, setStats] = useState(null); // {adjustment, soft_overdue_unpaid, by_status}
+  const [stats, setStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsErr, setStatsErr] = useState("");
 
-  // cache por status -> items [{id, number}]
-  const [statusItemsCache, setStatusItemsCache] = useState({}); // { [status]: {items, loading, error} }
+  const [statusItemsCache, setStatusItemsCache] = useState({});
 
   // --- Modal de lista (selector) ---
   const [listModalOpen, setListModalOpen] = useState(false);
@@ -172,6 +162,7 @@ export default function AdminPoliciesPage() {
 
   const isAdmin = !!user?.is_staff;
 
+  // ✅ LIST: cuando cambie page, trae la página
   useEffect(() => {
     dispatch(fetchAdminPolicies({ page }));
   }, [dispatch, page]);
@@ -181,12 +172,11 @@ export default function AdminPoliciesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Cargar stats al montar y cuando refrescás listado
+  // ✅ Cargar stats al montar
   const fetchStats = async () => {
     setLoadingStats(true);
     setStatsErr("");
     try {
-      // Backend: /api/admin/policies/policies/stats/
       const { data } = await api.get("/admin/policies/policies/stats/");
       setStats(data || null);
     } catch (e) {
@@ -203,7 +193,8 @@ export default function AdminPoliciesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  const metrics = useMemo(() => groupCounts(list), [list]);
+  // (no se usa en el render, pero lo dejo por si lo querés mostrar)
+  const metrics = useMemo(() => groupCounts(list), [list]); // eslint-disable-line no-unused-vars
 
   const fetchDeleted = async ({ page: p = deletedPage } = {}) => {
     setLoadingDeleted(true);
@@ -223,10 +214,10 @@ export default function AdminPoliciesPage() {
   };
 
   const onToggleDeleted = async () => {
-    const next = !showDeleted;
-    setShowDeleted(next);
+    const nextShow = !showDeleted;
+    setShowDeleted(nextShow);
 
-    if (next) {
+    if (nextShow) {
       setDeletedPage(1);
       await fetchDeleted({ page: 1 });
     }
@@ -239,6 +230,7 @@ export default function AdminPoliciesPage() {
     setErrorDeleted("");
     try {
       await adminPoliciesApi.restore(policy.id);
+
       dispatch(fetchAdminPolicies({ page }));
       await fetchDeleted({ page: deletedPage });
       void fetchStats();
@@ -251,6 +243,7 @@ export default function AdminPoliciesPage() {
     dispatch(clearAdminPoliciesErrors());
     setEditing(null);
     setEditErr("");
+
     dispatch(fetchAdminPolicies({ page }));
 
     if (showDeleted) {
@@ -261,7 +254,6 @@ export default function AdminPoliciesPage() {
     void fetchStats();
   };
 
-  // ✅ Carga detalle para el modal
   const onEdit = async (policyRow) => {
     if (!policyRow?.id) return;
 
@@ -383,7 +375,11 @@ export default function AdminPoliciesPage() {
     } catch (e) {
       setStatusItemsCache((prev) => ({
         ...prev,
-        [key]: { items: [], loading: false, error: "No se pudo cargar el listado para este estado." },
+        [key]: {
+          items: [],
+          loading: false,
+          error: "No se pudo cargar el listado para este estado.",
+        },
       }));
       return null;
     }
@@ -421,7 +417,6 @@ export default function AdminPoliciesPage() {
     setListModalItems(items);
   };
 
-  // ✅ Render util: tarjetas por status (robusto: array | dict | fallback desde list)
   const statusCards = useMemo(() => {
     const raw = stats?.by_status;
 
@@ -436,9 +431,9 @@ export default function AdminPoliciesPage() {
 
     if (raw && typeof raw === "object") {
       return Object.entries(raw)
-        .map(([status, count]) => ({
+        .map(([status, c]) => ({
           status: status || "unknown",
-          count: Number(count || 0),
+          count: Number(c || 0),
         }))
         .filter((it) => it.count > 0);
     }
@@ -450,9 +445,27 @@ export default function AdminPoliciesPage() {
     }
 
     return Object.entries(acc)
-      .map(([status, count]) => ({ status, count }))
+      .map(([status, c]) => ({ status, count: c }))
       .filter((it) => it.count > 0);
   }, [stats, list]);
+
+  // ✅ Paginación (clave del fix):
+  // - "Anterior" habilitado si page>1 (o previous por si querés)
+  // - "Siguiente" SOLO si existe "next" (lo manda DRF); evita 404 y evita que suba el contador sin datos
+  const canGoPrev = !loadingList && (page > 1 || Boolean(previous));
+  const canGoNext = useMemo(() => {
+    if (loadingList) return false;
+    if (next !== null && next !== undefined) return Boolean(next);
+    // fallback si por algún motivo no viene next (no debería con DRF)
+    return Array.isArray(list) && list.length > 0;
+  }, [loadingList, next, list]);
+
+  // opcional: mostrar "Página X / Y"
+  const totalPages = useMemo(() => {
+    const pageSize = 10; // backend DefaultPageNumberPagination.page_size
+    const total = Number(count || 0);
+    return Math.max(1, Math.ceil(total / pageSize));
+  }, [count]);
 
   return (
     <div className="admin-page">
@@ -465,7 +478,12 @@ export default function AdminPoliciesPage() {
         </div>
 
         <div className="admin-actions">
-          <button className="btn-secondary" type="button" onClick={onRefresh} disabled={loadingList}>
+          <button
+            className="btn-secondary"
+            type="button"
+            onClick={onRefresh}
+            disabled={loadingList}
+          >
             {loadingList ? "Actualizando…" : "Actualizar"}
           </button>
 
@@ -544,18 +562,20 @@ export default function AdminPoliciesPage() {
         <button
           className="btn-secondary"
           type="button"
-          disabled={page <= 1 || loadingList}
-          onClick={() => dispatch(setAdminPoliciesPage(page - 1))}
+          disabled={!canGoPrev}
+          onClick={() => dispatch(setAdminPoliciesPage(Math.max(1, page - 1)))}
         >
           Anterior
         </button>
 
-        <div className="page-chip">Página {page}</div>
+        <div className="page-chip">
+          Página {page} / {totalPages}
+        </div>
 
         <button
           className="btn-secondary"
           type="button"
-          disabled={loadingList || list.length === 0}
+          disabled={!canGoNext}
           onClick={() => dispatch(setAdminPoliciesPage(page + 1))}
         >
           Siguiente
@@ -564,12 +584,7 @@ export default function AdminPoliciesPage() {
 
       {/* ELIMINADAS */}
       <div style={{ marginTop: 14 }}>
-        <button
-          className="btn-secondary"
-          type="button"
-          onClick={onToggleDeleted}
-          disabled={loadingList}
-        >
+        <button className="btn-secondary" type="button" onClick={onToggleDeleted} disabled={loadingList}>
           {showDeleted ? "Ocultar eliminadas" : "Ver eliminadas"}
           {deletedCount ? ` (${deletedCount})` : ""}
         </button>
@@ -578,9 +593,7 @@ export default function AdminPoliciesPage() {
           <div className="table-card" style={{ marginTop: 10 }}>
             <div className="table-head">
               <div className="table-title">Pólizas eliminadas</div>
-              <div className="table-muted">
-                {loadingDeleted ? "Cargando…" : `${deletedList.length} ítems`}
-              </div>
+              <div className="table-muted">{loadingDeleted ? "Cargando…" : `${deletedList.length} ítems`}</div>
             </div>
 
             {errorDeleted ? (
@@ -622,19 +635,12 @@ export default function AdminPoliciesPage() {
                         <td>{p.product_name || "-"}</td>
                         <td className="mono">{p.premium}</td>
                         <td>
-                          <span className={`badge ${p.status || "unknown"}`}>
-                            {p.status || "unknown"}
-                          </span>
+                          <span className={`badge ${p.status || "unknown"}`}>{p.status || "unknown"}</span>
                         </td>
                         <td className="mono">{fmtRange(p.start_date, p.end_date)}</td>
                         <td style={{ textAlign: "right" }}>
                           <div className="row-actions">
-                            <button
-                              className="btn-link"
-                              type="button"
-                              onClick={() => onRestore(p)}
-                              disabled={loadingDeleted}
-                            >
+                            <button className="btn-link" type="button" onClick={() => onRestore(p)} disabled={loadingDeleted}>
                               Recuperar
                             </button>
                           </div>

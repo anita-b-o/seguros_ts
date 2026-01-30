@@ -3,11 +3,16 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { Provider } from "react-redux";
 import { store } from "@/app/store";
-import { BrowserRouter } from "react-router-dom";
+
+import {
+  createBrowserRouter,
+  RouterProvider,
+} from "react-router-dom";
+
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import { ToastProvider } from "@/contexts/ToastContext";
 import ErrorBoundary from "@/components/util/ErrorBoundary";
-import AppRoutes from "./routes.jsx";
+import AppRoutes from "@/app/routes.jsx";
 
 import "@/styles/reset.css";
 import "@/styles/base.css";
@@ -16,16 +21,31 @@ import "@/styles/toast.css";
 
 const googleEnabled =
   import.meta.env.VITE_ENABLE_GOOGLE === "true" &&
-  Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID);
+  Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID) &&
+  !String(import.meta.env.VITE_GOOGLE_CLIENT_ID).startsWith("xxxx");
+
+// Router con future flags (reduce warnings deprecación / v7)
+const router = createBrowserRouter(
+  [
+    {
+      path: "/*",
+      element: <AppRoutes />,
+    },
+  ],
+  {
+    future: {
+      v7_startTransition: true,
+      v7_relativeSplatPath: true,
+    },
+  }
+);
 
 const appTree = (
   <Provider store={store}>
     <ToastProvider>
-      <BrowserRouter>
-        <ErrorBoundary>
-          <AppRoutes />
-        </ErrorBoundary>
-      </BrowserRouter>
+      <ErrorBoundary>
+        <RouterProvider router={router} />
+      </ErrorBoundary>
     </ToastProvider>
   </Provider>
 );

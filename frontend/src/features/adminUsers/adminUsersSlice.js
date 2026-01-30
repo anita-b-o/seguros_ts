@@ -1,4 +1,3 @@
-// src/features/adminUsers/adminUsersSlice.js
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { adminUsersApi } from "@/services/adminUsersApi";
 
@@ -9,7 +8,12 @@ export const fetchAdminUsers = createAsyncThunk(
       const data = await adminUsersApi.list({ page, page_size, q });
       return data;
     } catch (e) {
-      return rejectWithValue("No se pudieron cargar los usuarios.");
+      const detail =
+        e?.response?.data?.detail ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Error desconocido";
+      return rejectWithValue(detail);
     }
   }
 );
@@ -47,8 +51,26 @@ const adminUsersSlice = createSlice({
       })
       .addCase(fetchAdminUsers.fulfilled, (state, action) => {
         state.loadingList = false;
-        state.list = Array.isArray(action.payload?.results) ? action.payload.results : [];
-        state.count = Number(action.payload?.count || 0);
+
+        const payload = action.payload;
+
+        // ✅ CASO 1: backend devuelve array simple
+        if (Array.isArray(payload)) {
+          state.list = payload;
+          state.count = payload.length;
+          return;
+        }
+
+        // ✅ CASO 2: backend devuelve paginado DRF
+        if (payload && typeof payload === "object") {
+          state.list = Array.isArray(payload.results) ? payload.results : [];
+          state.count = Number(payload.count || state.list.length || 0);
+          return;
+        }
+
+        // fallback defensivo
+        state.list = [];
+        state.count = 0;
       })
       .addCase(fetchAdminUsers.rejected, (state, action) => {
         state.loadingList = false;
@@ -59,7 +81,10 @@ const adminUsersSlice = createSlice({
   },
 });
 
-export const { clearAdminUsersErrors, setAdminUsersPage, setAdminUsersQuery } =
-  adminUsersSlice.actions;
+export const {
+  clearAdminUsersErrors,
+  setAdminUsersPage,
+  setAdminUsersQuery,
+} = adminUsersSlice.actions;
 
 export default adminUsersSlice.reducer;

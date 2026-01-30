@@ -58,20 +58,57 @@ function parseISODate(iso) {
   return dt;
 }
 
-function isWithinPaymentWindow(policy) {
-  // Regla UI: habilitado si hoy <= payment_end_date
-  const endISO = pickFirst(policy, ["payment_end_date"]) || null;
-  const end = parseISODate(endISO);
-  if (!end) return false;
-  const today = parseISODate(todayISO());
-  return !!today && today.getTime() <= end.getTime();
-}
-
+/**
+ * ✅ PAID helper (evita ReferenceError)
+ */
 function isPaid(policy) {
-  const bs = (policy?.billing_status || "").toUpperCase();
+  const bs = String(policy?.billing_status || "").toUpperCase();
   return bs === "PAID";
 }
 
+/**
+ * ✅ Ventana de pago INCLUSIVA:
+ * - hoy >= payment_start_date
+ * - hoy <= payment_end_date  (incluye el día de vencimiento)
+ */
+function isWithinPaymentWindow(policy) {
+  const startISO = pickFirst(policy, ["payment_start_date"]) || null;
+  const endISO = pickFirst(policy, ["payment_end_date"]) || null;
+
+  const start = parseISODate(startISO);
+  const end = parseISODate(endISO);
+
+  // Si falta cualquiera de las dos fechas, no habilitamos
+  if (!start || !end) return false;
+
+  const today = parseISODate(todayISO());
+  if (!today) return false;
+
+  // ✅ Inclusive: permite cobrar en start_date, en end_date, y entre medio
+  return today.getTime() >= start.getTime() && today.getTime() <= end.getTime();
+}
+
+function clientLabel(u) {
+  const name =
+    [u?.first_name, u?.last_name].filter(Boolean).join(" ").trim() ||
+    u?.full_name ||
+    u?.username ||
+    "";
+  const email = u?.email ? String(u.email) : "";
+  const base = name || email || `Usuario #${u?.id}`;
+  return email && name ? `${base} — ${email}` : base;
+}
+
+function getPolicyUserId(policy) {
+  const id = policy?.user_id ?? policy?.user_obj?.id ?? policy?.user?.id ?? null;
+  return id != null ? String(id) : "";
+}
+
+/**
+ * ✅ Traer usuarios clientes
+ * - Soporta DRF paginado ({results}) o lista simple
+ * - Filtra fuera staff/superuser para que el select muestre "clientes"
+ */
 async function fetchAdminUsers({ page = 1, search = "" } = {}) {
   const params = new URLSearchParams();
   params.set("page", String(page));
@@ -82,7 +119,20 @@ async function fetchAdminUsers({ page = 1, search = "" } = {}) {
     : `/admin/accounts/users/`;
 
   const { data } = await api.get(url);
-  return data;
+
+  const raw = Array.isArray(data?.results)
+    ? data.results
+    : Array.isArray(data)
+      ? data
+      : [];
+  // filtro defensivo: no mostrar staff/superuser en "Cliente"
+  const filtered = raw.filter((u) => !u?.is_staff && !u?.is_superuser);
+
+  return {
+    raw: filtered,
+    total: Number(data?.count || filtered.length || 0),
+    next: data?.next ?? null,
+  };
 }
 
 export default function PolicyFormModal({ open, onClose, policy }) {
@@ -97,6 +147,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
   const [users, setUsers] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [usersErr, setUsersErr] = useState("");
 
   const [number, setNumber] = useState("");
   const [productId, setProductId] = useState("");
@@ -104,7 +155,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
   const [premium, setPremium] = useState("");
   const [startDate, setStartDate] = useState(todayISO());
 
-  // ✅ NUEVO: flag local “pendiente de marcar abonada al guardar”
+  // ✅ flag local “pendiente de marcar abonada al guardar”
   const [markPaidOnSave, setMarkPaidOnSave] = useState(false);
 
   const endDatePreview = useMemo(() => addMonthsISO(startDate, 3), [startDate]);
@@ -115,45 +166,66 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     !loadingSave &&
     !loadingMarkPaid;
 
+  // ✅ Cargar productos + usuarios al abrir SIEMPRE (crear y editar)
   useEffect(() => {
     if (!open) return;
 
     dispatch(clearAdminPoliciesErrors());
+    setUsersErr("");
 
     if (isEdit) {
       setNumber(policy?.number || "");
       setProductId(String(policy?.product_id ?? ""));
-      setUserId(String(policy?.user_id ?? ""));
+      setUserId(getPolicyUserId(policy)); // ✅ robusto: user_id / user.id / user_obj.id
       setPremium(policy?.premium != null ? String(policy.premium) : "");
       setStartDate(policy?.start_date || todayISO());
-
-      // ✅ Al abrir edición: por default no marcamos nada hasta que el usuario lo tilda
       setMarkPaidOnSave(false);
-      return;
+    } else {
+      setNumber("");
+      setProductId("");
+      setUserId("");
+      setPremium("");
+      setStartDate(todayISO());
+      setMarkPaidOnSave(false);
     }
 
-    setNumber("");
-    setProductId("");
-    setUserId("");
-    setPremium("");
-    setStartDate(todayISO());
-    setMarkPaidOnSave(false);
+    let alive = true;
 
     (async () => {
       setLoadingProducts(true);
       setLoadingUsers(true);
+
       try {
-        const [prod, users] = await Promise.allSettled([
+        // Traemos la PRIMERA página de productos + usuarios (en paralelo)
+        const [prodRes, usersRes] = await Promise.allSettled([
           adminPoliciesApi.listInsuranceTypes({ page: 1 }),
           fetchAdminUsers({ page: 1 }),
         ]);
-        if (prod.status === "fulfilled") setProducts(prod.value?.results || []);
-        if (users.status === "fulfilled") setUsers(users.value?.results || []);
+
+        if (!alive) return;
+
+        if (prodRes.status === "fulfilled") setProducts(prodRes.value?.results || []);
+
+        if (usersRes.status === "fulfilled") {
+          setUsers(usersRes.value?.raw || []);
+          if ((usersRes.value?.raw || []).length === 0) {
+            // no es error, pero te avisa si vino vacío
+            setUsersErr("");
+          }
+        } else {
+          setUsers([]);
+          setUsersErr("No se pudieron cargar los clientes.");
+        }
       } finally {
+        if (!alive) return;
         setLoadingProducts(false);
         setLoadingUsers(false);
       }
     })();
+
+    return () => {
+      alive = false;
+    };
   }, [open, isEdit, policy, dispatch]);
 
   if (!open) return null;
@@ -177,7 +249,8 @@ export default function PolicyFormModal({ open, onClose, policy }) {
   const inPayWindow = isWithinPaymentWindow(policy);
 
   // ✅ Permitimos “tildar” solo si se puede realmente ejecutar en backend
-  const canToggleMarkPaid = isEdit && !paid && inPayWindow && !loadingSave && !loadingMarkPaid;
+  const canToggleMarkPaid =
+    isEdit && !paid && inPayWindow && !loadingSave && !loadingMarkPaid;
 
   const markPaidHint = !isEdit
     ? ""
@@ -186,6 +259,11 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       : !inPayWindow
         ? "Fuera del período de pago."
         : "Se aplicará al tocar Guardar.";
+
+  // ✅ Si el userId actual no está en el listado (filtros/paginación),
+  // agregamos una opción “Cliente actual” para que el select muestre el valor.
+  const selectedMissing =
+    safeStr(userId).trim() && !users.some((u) => String(u.id) === String(userId));
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -198,7 +276,9 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       };
 
       if (safeStr(startDate).trim()) payload.start_date = startDate;
-      if (safeStr(userId).trim()) payload.user_id = Number(userId);
+
+      // ✅ permitir desasignar cliente: si userId === "" mandamos null
+      payload.user_id = safeStr(userId).trim() ? Number(userId) : null;
 
       // 1) Guardar cambios primero
       const resSave = await dispatch(patchAdminPolicy({ id: policy.id, payload }));
@@ -213,19 +293,22 @@ export default function PolicyFormModal({ open, onClose, policy }) {
         }
       }
 
-      // 3) Cerrar modal solo si todo salió bien (save y opcional markPaid)
+      // 3) Cerrar modal solo si todo salió bien
       onClose?.();
       return;
     }
 
-    // CREATE (sin marcar abonada, aplica solo a edición)
+    // CREATE
     const payload = {
       number: number.trim(),
       premium: String(premium),
     };
 
     if (safeStr(productId).trim()) payload.product_id = Number(productId);
+
+    // ✅ permitir crear sin cliente: si vacío no mandamos user_id
     if (safeStr(userId).trim()) payload.user_id = Number(userId);
+
     if (safeStr(startDate).trim()) payload.start_date = startDate;
 
     const res = await dispatch(createAdminPolicy(payload));
@@ -252,7 +335,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               </div>
             ) : null}
           </div>
-          <button className="modal-x" onClick={onClose}>
+          <button className="modal-x" onClick={onClose} aria-label="Cerrar">
             ✕
           </button>
         </div>
@@ -300,9 +383,13 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               <div style={{ gridColumn: "1 / -1" }}>
                 <div className="info-k">Estado de cobro</div>
                 <div className="info-v">
-                  <span className="mono">{paid ? "PAID" : safeStr(policy?.billing_status || "UNPAID")}</span>
+                  <span className="mono">
+                    {paid ? "PAID" : safeStr(policy?.billing_status || "UNPAID")}
+                  </span>
                   {" · "}
-                  <span className="mono">{inPayWindow ? "Dentro de período" : "Fuera de período"}</span>
+                  <span className="mono">
+                    {inPayWindow ? "Dentro de período" : "Fuera de período"}
+                  </span>
                 </div>
 
                 {errorMarkPaid ? (
@@ -314,9 +401,16 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                 ) : null}
               </div>
 
-              {/* ✅ NUEVO: toggle local (NO ejecuta nada hasta Guardar) */}
+              {/* ✅ toggle local (NO ejecuta nada hasta Guardar) */}
               <div style={{ gridColumn: "1 / -1" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canToggleMarkPaid ? "pointer" : "not-allowed" }}>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    cursor: canToggleMarkPaid ? "pointer" : "not-allowed",
+                  }}
+                >
                   <input
                     type="checkbox"
                     checked={markPaidOnSave}
@@ -363,6 +457,28 @@ export default function PolicyFormModal({ open, onClose, policy }) {
           {!isEdit && (
             <>
               <label className="form-label">
+                Tipo de seguro
+                <select
+                  className={`form-input ${getFieldErr("product_id") ? "is-invalid" : ""}`}
+                  value={productId}
+                  onChange={(e) => setProductId(e.target.value)}
+                  disabled={loadingProducts}
+                >
+                  <option value="">
+                    {loadingProducts ? "Cargando productos…" : "Seleccionar…"}
+                  </option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name || `Producto #${p.id}`}
+                    </option>
+                  ))}
+                </select>
+                {getFieldErr("product_id") && (
+                  <div className="field-err">{getFieldErr("product_id")}</div>
+                )}
+              </label>
+
+              <label className="form-label">
                 Fecha inicio
                 <input
                   type="date"
@@ -381,19 +497,30 @@ export default function PolicyFormModal({ open, onClose, policy }) {
 
           <label className="form-label">
             Cliente
+            {usersErr ? <div className="field-err">{usersErr}</div> : null}
+
             <select
-              className="form-input"
+              className={`form-input ${getFieldErr("user_id") ? "is-invalid" : ""}`}
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               disabled={loadingUsers}
             >
-              <option value="">Sin cliente</option>
+              <option value="">
+                {loadingUsers ? "Cargando clientes…" : "Sin cliente"}
+              </option>
+
+              {selectedMissing ? (
+                <option value={userId}>Cliente actual (id #{userId})</option>
+              ) : null}
+
               {users.map((u) => (
                 <option key={u.id} value={u.id}>
-                  {u.email}
+                  {clientLabel(u)}
                 </option>
               ))}
             </select>
+
+            {getFieldErr("user_id") && <div className="field-err">{getFieldErr("user_id")}</div>}
           </label>
 
           <div className="modal-actions">
@@ -401,11 +528,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               Cancelar
             </button>
             <button className="btn-primary" type="submit" disabled={!canSubmit}>
-              {loadingSave || loadingMarkPaid
-                ? "Guardando…"
-                : isEdit
-                  ? "Guardar"
-                  : "Crear"}
+              {loadingSave || loadingMarkPaid ? "Guardando…" : isEdit ? "Guardar" : "Crear"}
             </button>
           </div>
         </form>

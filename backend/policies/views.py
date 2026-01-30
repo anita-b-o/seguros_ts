@@ -11,6 +11,7 @@ from django.db.models import Case, Count, IntegerField, Prefetch, Q, Value, When
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
@@ -36,6 +37,15 @@ from .serializers import (
     PolicySerializer,
     PolicyVehicleSerializer,
 )
+
+
+# ----------------------------
+# Pagination: receipts (dashboard)
+# ----------------------------
+class ReceiptsPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+    max_page_size = 50
 
 
 def _gen_claim_code(length=8):
@@ -91,7 +101,7 @@ def _policy_timeline(policy, *, settings_obj=None, period=None):
     - vencimiento real = cycle_end (último día del período)
     - BillingPeriod (si existe) se usa solo para enriquecer/consistir, NO como requisito.
 
-    ✅ Ventana de ajuste (TU regla):
+    ✅ Ventana de ajuste:
     policy_adjustment_window_days días ANTES de end_date.
     Si end_date = 20 y window=5 => [15..19] (end_date no se incluye).
     """
@@ -125,7 +135,7 @@ def _policy_timeline(policy, *, settings_obj=None, period=None):
         if d_soft:
             client_due = d_soft
 
-    # ✅ Período de ajuste por preferencia del admin (policy_adjustment_window_days)
+    # ✅ Período de ajuste por preferencia del admin
     adjustment_from = adjustment_to = None
     if settings_obj:
         try:
@@ -140,12 +150,11 @@ def _policy_timeline(policy, *, settings_obj=None, period=None):
 
     return {
         "real_end_date": real_due,
-        "client_end_date": client_due,  # ✅ vencimiento adelantado (display)
+        "client_end_date": client_due,
         "payment_start_date": payment_start,
-        "payment_end_date": payment_end,  # ✅ vencimiento real (hard)
+        "payment_end_date": payment_end,
         "adjustment_from": adjustment_from,
         "adjustment_to": adjustment_to,
-        # debug/UX opcional
         "payment_window_days": cycle.get("window_days") if cycle else None,
         "payment_early_due_days": cycle.get("early_due_days") if cycle else None,
     }
@@ -172,11 +181,11 @@ def _client_status(status, client_end, real_end, payment_end=None):
     payment_end = _to_date(payment_end)
     client_end = _to_date(client_end)
 
-    # “expired” si venció el real (hard)
+    # expired si venció el hard
     if real_end and real_end < today:
         return "expired"
 
-    # “no_coverage” si venció el adelantado (soft)
+    # no_coverage si venció el soft
     if client_end and client_end < today:
         return "no_coverage"
 
@@ -186,7 +195,7 @@ def _client_status(status, client_end, real_end, payment_end=None):
 def _ensure_current_cycle(policy, *, now=None, allow_create=False):
     """
     BillingPeriod puede existir o no. Para UI no es requisito.
-    En endpoints de cliente permitimos crear BillingPeriod para mantener lógica de cobro/suspensión.
+    En endpoints cliente permitimos crear BillingPeriod para mantener lógica de cobro/suspensión.
     """
     today = now or timezone.localdate()
     if allow_create:
@@ -198,9 +207,6 @@ def _ensure_current_cycle(policy, *, now=None, allow_create=False):
 
 
 def _soft_delete_policy(policy: Policy):
-    """
-    Soft delete robusto: usa soft_delete() si existe, sino setea flags comunes.
-    """
     if hasattr(policy, "soft_delete") and callable(getattr(policy, "soft_delete")):
         policy.soft_delete()
         return
@@ -217,9 +223,6 @@ def _soft_delete_policy(policy: Policy):
 
 
 def _restore_policy(policy: Policy):
-    """
-    Restore robusto: usa restore() si existe, sino revierte flags comunes.
-    """
     if hasattr(policy, "restore") and callable(getattr(policy, "restore")):
         policy.restore()
         return
@@ -249,7 +252,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Default (no-admin): por seguridad NO incluye eliminadas.
-        Admin: puede pedir include_deleted=true o deleted_only=true si lo necesitás en algún flujo.
+        Admin: puede pedir include_deleted=true o deleted_only=true si lo necesitás.
         """
         base_qs = (
             Policy.objects.select_related("user", "product", "vehicle")
@@ -281,7 +284,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()
 
-        # filtros admin: search por number o plate, solo sin usuario
+        # filtros admin: search por number o plate
         q = (request.query_params.get("search") or "").strip()
         if q:
             qs = qs.filter(
@@ -307,7 +310,6 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         timeline_map = {}
 
         for policy in policies:
-            # Listado admin: NO crear BillingPeriod por listar.
             period = _ensure_current_cycle(policy, now=now, allow_create=False)
             timeline_map[policy.id] = _policy_timeline(policy, settings_obj=settings_obj, period=period)
 
@@ -377,11 +379,100 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
             )
         return Response(data)
 
+    @action(detail=False, methods=["get"], url_path="my/dashboard")
+    def my_dashboard(self, request):
+        """
+        GET /api/policies/my/dashboard/?policy_id=<id opcional>
+
+        - policies: lista liviana para dropdown (NO crea BillingPeriod masivamente)
+        - selected: detalle completo
+        - billing_current: BillingPeriod vigente (si existe)
+        - timeline: timeline de la seleccionada
+        """
+        user = request.user
+        settings_obj = _get_settings_obj()
+
+        qs = self.get_queryset().filter(user=user, is_deleted=False).order_by("-id")
+        policies = list(qs)
+
+        if not policies:
+            return Response({"policies": [], "selected": None, "billing_current": None, "timeline": None})
+
+        raw_policy_id = (request.query_params.get("policy_id") or "").strip()
+        selected = None
+        if raw_policy_id:
+            selected = next((p for p in policies if str(p.id) == str(raw_policy_id)), None)
+        if not selected:
+            selected = policies[0]
+
+        now = timezone.localdate()
+
+        # Dropdown: sin side-effects masivos
+        timeline_map_list = {}
+        for p in policies:
+            period = _ensure_current_cycle(p, now=now, allow_create=False)
+            timeline_map_list[p.id] = _policy_timeline(p, settings_obj=settings_obj, period=period)
+
+        list_ser = PolicyClientListSerializer(
+            policies,
+            many=True,
+            context={"timeline_map": timeline_map_list, "request": request},
+        )
+        policies_data = list_ser.data
+
+        for item in policies_data:
+            tl = timeline_map_list.get(item["id"], {})
+            cid = tl.get("client_end_date")
+            item["client_end_date"] = cid
+            item["payment_start_date"] = tl.get("payment_start_date")
+            item["payment_end_date"] = tl.get("payment_end_date")
+            item["adjustment_from"] = tl.get("adjustment_from")
+            item["adjustment_to"] = tl.get("adjustment_to")
+            item["status"] = _client_status(
+                item.get("status"),
+                cid,
+                tl.get("real_end_date"),
+                tl.get("payment_end_date"),
+            )
+
+        # Seleccionada: detalle + billing_current (permitimos crear)
+        selected_period = _ensure_current_cycle(selected, now=now, allow_create=True)
+        selected_timeline = _policy_timeline(selected, settings_obj=settings_obj, period=selected_period)
+
+        detail_ser = PolicyClientDetailSerializer(
+            selected,
+            context={"timeline_map": {selected.id: selected_timeline}, "request": request},
+        )
+        selected_data = detail_ser.data
+
+        cid = selected_timeline.get("client_end_date")
+        selected_data["client_end_date"] = cid
+        selected_data["payment_start_date"] = selected_timeline.get("payment_start_date")
+        selected_data["payment_end_date"] = selected_timeline.get("payment_end_date")
+        selected_data["adjustment_from"] = selected_timeline.get("adjustment_from")
+        selected_data["adjustment_to"] = selected_timeline.get("adjustment_to")
+        selected_data["status"] = _client_status(
+            selected_data.get("status"),
+            cid,
+            selected_timeline.get("real_end_date"),
+            selected_timeline.get("payment_end_date"),
+        )
+
+        billing_current = BillingPeriodCurrentSerializer(selected_period).data if selected_period else None
+
+        return Response(
+            {
+                "policies": policies_data,
+                "selected": selected_data,
+                "billing_current": billing_current,
+                "timeline": selected_timeline,
+            }
+        )
+
     def retrieve(self, request, *args, **kwargs):
         obj = self.get_object()
         self.check_object_permissions(request, obj)
 
-        # Si está eliminada, sólo admin puede verla
         if getattr(obj, "is_deleted", False) and not request.user.is_staff:
             return Response({"detail": "No encontrada."}, status=404)
 
@@ -445,9 +536,22 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"], url_path="receipts")
     def receipts(self, request, pk=None):
+        """
+        GET /api/policies/<pk>/receipts/?page=1&page_size=10
+        """
         policy = self.get_object()
+        self.check_object_permissions(request, policy)
+
+        # si está eliminada, solo admin
+        if getattr(policy, "is_deleted", False) and not request.user.is_staff:
+            return Response({"detail": "No encontrada."}, status=404)
+
         qs = Receipt.objects.filter(policy=policy).order_by("-date", "-id")
-        return Response(ReceiptSerializer(qs, many=True, context={"request": request}).data)
+
+        paginator = ReceiptsPagination()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        serializer = ReceiptSerializer(page, many=True, context={"request": request})
+        return paginator.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=["post"], url_path="claim")
     def claim(self, request):
@@ -473,10 +577,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         _ensure_current_cycle(policy)
 
         if policy.user_id and policy.user_id != request.user.id:
-            return Response(
-                {"detail": "Esta póliza ya pertenece a otro usuario."},
-                status=400,
-            )
+            return Response({"detail": "Esta póliza ya pertenece a otro usuario."}, status=400)
 
         product = policy.product
         vehicle = getattr(policy, "contract_vehicle", None)
@@ -506,9 +607,6 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="regenerate-claim")
     def regenerate_claim(self, request, pk=None):
-        """
-        Admin: genera un nuevo claim_code para la póliza y lo devuelve.
-        """
         policy = self.get_object()
         self.check_object_permissions(request, policy)
         if not request.user.is_staff:
@@ -525,7 +623,6 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
         instance = serializer.instance
 
-        # Si se actualiza premium dentro de la ventana de ajuste, se arranca nuevo período:
         premium_changed = "premium" in data
         prev_end = getattr(instance, "end_date", None)
 
@@ -548,9 +645,9 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
 
 class PolicyViewSet(PolicyBaseViewSet):
     def get_permissions(self):
-        if self.action in ["my", "claim"]:
+        if self.action in ["my", "my_dashboard", "claim"]:
             return [permissions.IsAuthenticated()]
-        if self.action in ["retrieve", "receipts", "refresh"]:
+        if self.action in ["retrieve", "receipts", "refresh", "billing_current"]:
             return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
         if self.action in ["list", "create", "update", "partial_update", "destroy"]:
             return [permissions.IsAdminUser()]
@@ -578,31 +675,6 @@ class PolicyViewSet(PolicyBaseViewSet):
 
 
 class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
-    """
-    ViewSet para /api/admin/policies/policies/
-
-    Requisitos UI:
-    - Listado normal: sólo activas (no eliminadas)
-    - Dropdown "Eliminadas": /deleted/ paginado (ideal page_size=5)
-    - Botón "Recuperar": POST /{id}/restore/
-    - Delete: soft delete (no borrado físico)
-
-    ✅ Período de ajuste (policy_adjustment_window_days):
-    - Mostrar primero las pólizas “en ajuste” (dentro del paginado).
-    - Soportar filtro ?in_adjustment=true.
-
-    ✅ Marcar abonada:
-    - POST /api/admin/policies/policies/{id}/mark-paid(/)
-      Crea Payment manual APR y marca el BillingPeriod vigente como PAID,
-      SOLO si hoy <= due_date_hard (dentro del periodo de pago).
-
-    ✅ Stats (tarjetas AdminHome):
-    - GET /api/admin/policies/policies/stats/
-      Devuelve:
-        - adjustment: count + items (id, number)
-        - soft_overdue_unpaid: count + items (id, number)
-        - by_status: [{status, count}]
-    """
     permission_classes = [IsAdminUser]
 
     def get_serializer_class(self):
@@ -611,11 +683,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         return PolicySerializer
 
     def get_queryset(self):
-        """
-        IMPORTANTE:
-        Para que restore pueda operar sobre eliminadas, este queryset NO filtra por is_deleted.
-        El filtrado se hace por acción (list vs deleted).
-        """
         base_qs = (
             Policy.objects.select_related("user", "product", "vehicle")
             .prefetch_related(Prefetch("legacy_vehicle", queryset=PolicyVehicle.objects.all()))
@@ -624,14 +691,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         return policy_scope_queryset(base_qs, self.request)
 
     def _with_adjustment_ordering_and_filter(self, qs):
-        """
-        Ordena con "en ajuste" primero y opcionalmente filtra.
-
-        Regla "en ajuste" consistente con _policy_timeline():
-        - Si end_date = 20 y window=5 => [15..19] (end_date no se incluye)
-        - in_adjustment ⇔ today ∈ [end_date - window_days, end_date - 1]
-          (equivalente a: end_date ∈ [today + 1, today + window_days])
-        """
         settings_obj = _get_settings_obj()
         try:
             window_days = int(getattr(settings_obj, "policy_adjustment_window_days", 0) or 0)
@@ -663,16 +722,11 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         return qs
 
     def _is_period_unpaid(self, period: BillingPeriod | None) -> bool:
-        """
-        Determinístico con tu modelo actual (BillingPeriod.Status).
-        Si no hay periodo, lo consideramos unpaid (conservador).
-        """
         if not period:
             return True
         try:
             return period.status != BillingPeriod.Status.PAID
         except Exception:
-            # fallback si status no existe o no es enum
             v = getattr(period, "status", None)
             return str(v).upper() != "PAID"
 
@@ -697,12 +751,10 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         if only_unassigned:
             qs = qs.filter(user__isnull=True)
 
-        # ✅ NUEVO: filtro por status (para tarjetas por estado)
         status_filter = (request.query_params.get("status") or "").strip()
         if status_filter:
             qs = qs.filter(status=status_filter)
 
-        # ✅ ordenamiento + filtro por período de ajuste
         qs = self._with_adjustment_ordering_and_filter(qs)
 
         settings_obj = _get_settings_obj()
@@ -726,14 +778,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
 
     @action(detail=False, methods=["get"], url_path="stats")
     def stats(self, request):
-        """
-        GET /api/admin/policies/policies/stats/
-
-        Para AdminHome:
-        - adjustment: pólizas en período de ajuste (count + items id/number)
-        - soft_overdue_unpaid: UNPAID y hoy > client_end_date pero hoy <= real_end_date
-        - by_status: conteo por status (DB)
-        """
         now = timezone.localdate()
         settings_obj = _get_settings_obj()
 
@@ -741,7 +785,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         if hasattr(Policy, "is_deleted"):
             qs = qs.filter(is_deleted=False)
 
-        # --- Adjustment (DB) ---
         try:
             window_days = int(getattr(settings_obj, "policy_adjustment_window_days", 0) or 0)
         except Exception:
@@ -752,15 +795,11 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
             lower = now + timedelta(days=1)
             upper = now + timedelta(days=window_days)
             adj_qs = qs.filter(end_date__isnull=False, end_date__gte=lower, end_date__lte=upper).order_by("-id")
-            # items para modal (limit razonable)
             adjustment_items = list(adj_qs.values("id", "number")[:500])
 
         adjustment_count = len(adjustment_items)
 
-        # --- Soft overdue unpaid (mixto, por timeline) ---
-        # Def: no abonada + pasó venc. adelantado (client_end) + aún no venció real (real_end)
         soft_items = []
-        # Reducimos candidatos: real_end usualmente es end_date/due_date_hard, o sea >= hoy
         candidates = qs.exclude(end_date__isnull=True).filter(end_date__gte=now).order_by("-id")[:3000]
 
         for p in candidates:
@@ -793,10 +832,7 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
 
         soft_count = len(soft_items)
 
-        # --- by_status (DB) ---
-        by_status = list(
-            qs.values("status").annotate(count=Count("id")).order_by("status")
-        )
+        by_status = list(qs.values("status").annotate(count=Count("id")).order_by("status"))
 
         return Response(
             {
@@ -808,10 +844,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
 
     @action(detail=False, methods=["get"], url_path="deleted")
     def deleted(self, request):
-        """
-        GET /api/admin/policies/policies/deleted/?page=1&page_size=5
-        Lista pólizas eliminadas (soft delete) paginadas.
-        """
         qs = self.get_queryset()
         if not hasattr(Policy, "is_deleted"):
             return Response(
@@ -842,10 +874,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
 
     @action(detail=True, methods=["post"], url_path="restore")
     def restore(self, request, pk=None):
-        """
-        POST /api/admin/policies/policies/{id}/restore/
-        Restaura una póliza eliminada.
-        """
         policy = self.get_object()
         try:
             _restore_policy(policy)
@@ -862,23 +890,13 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
 
     @action(detail=True, methods=["post"], url_path="mark-paid")
     def mark_paid(self, request, pk=None):
-        """
-        POST /api/admin/policies/policies/{id}/mark-paid(/)
-
-        Marca como abonado el periodo vigente SOLO si está dentro de la ventana de pago:
-        hoy <= due_date_hard.
-        Crea Payment manual APR (idempotente por uniq_billing_period_approved)
-        y genera Receipt + PDF.
-        """
         policy = self.get_object()
         today = timezone.localdate()
 
-        # Garantiza periodo vigente (crea si falta)
         period = ensure_current_billing_period(policy, now=today)
         if not period:
             return Response({"detail": "No hay periodo vigente para cobrar."}, status=400)
 
-        # Validación “durante el periodo de pago”
         if getattr(period, "due_date_hard", None) and today > period.due_date_hard:
             return Response(
                 {
@@ -888,7 +906,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
                 status=400,
             )
 
-        # Si ya está pagado, idempotente
         try:
             already_paid = period.status == BillingPeriod.Status.PAID
         except Exception:
@@ -908,12 +925,7 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
                 status=200,
             )
 
-        # Si ya existe un payment APR para este BillingPeriod, no duplicar
-        existing_payment = (
-            Payment.objects.filter(billing_period=period, state="APR")
-            .order_by("-id")
-            .first()
-        )
+        existing_payment = Payment.objects.filter(billing_period=period, state="APR").order_by("-id").first()
 
         if not existing_payment:
             try:
@@ -925,18 +937,13 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
                     mp_preference_id="manual",
                 )
             except Exception:
-                # Si compite con otra operación (constraint uniq_billing_period_approved), re-lee
                 existing_payment = (
-                    Payment.objects.filter(billing_period=period, state="APR")
-                    .order_by("-id")
-                    .first()
+                    Payment.objects.filter(billing_period=period, state="APR").order_by("-id").first()
                 )
 
-        # Marcar periodo pagado y reactivar póliza si correspondía
         period.mark_paid()
         reactivate_policy_if_applicable(policy)
 
-        # Receipt + PDF (siempre intentamos)
         admin_user_id = getattr(request.user, "id", None)
         receipt = Receipt.objects.create(
             policy=policy,
@@ -965,7 +972,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
             except Exception:
                 pass
 
-        # Respuesta: policy actualizado para refrescar modal/listado
         settings_obj = _get_settings_obj()
         timeline = _policy_timeline(policy, settings_obj=settings_obj, period=period)
         return Response(
@@ -982,9 +988,6 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         )
 
     def perform_destroy(self, instance):
-        """
-        Delete desde admin = soft delete.
-        """
         _soft_delete_policy(instance)
 
     @action(detail=False, methods=["get"], url_path="adjustment-count")

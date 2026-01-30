@@ -7,37 +7,35 @@ export const adminUsersApi = {
     params.set("page", String(page));
     params.set("page_size", String(page_size));
 
-    // Solo clientes (si tu backend no filtra por is_staff, simplemente lo ignorará)
-    params.set("is_staff", "false");
+    // DRF SearchFilter suele usar "search"
+    if (q && String(q).trim()) params.set("search", String(q).trim());
 
-    // Búsqueda (si tu backend no soporta q, lo ignorará)
-    if (q) params.set("q", q);
-
-    const { data } = await api.get(`/admin/accounts/users?${params.toString()}`);
+    const url = `/admin/accounts/users/?${params.toString()}`; // ✅ OJO: api ya suele tener baseURL "/api"
+    const { data } = await api.get(url);
     return data;
   },
 
   get: async (id) => {
-    const { data } = await api.get(`/admin/accounts/users/${id}`);
+    const { data } = await api.get(`/admin/accounts/users/${id}/`);
     return data;
   },
 
-  // --- UserPolicies ---
   listPolicies: async (userId) => {
-    const { data } = await api.get(`/admin/accounts/users/${userId}/policies`);
+    const { data } = await api.get(`/admin/accounts/users/${userId}/policies/`);
     return data;
   },
 
   attachPolicy: async (userId, policyId) => {
-    const { data } = await api.post(`/admin/accounts/users/${userId}/policies`, {
+    const { data } = await api.post(`/admin/accounts/users/${userId}/policies/`, {
       policy_id: policyId,
     });
     return data;
   },
 
   detachPolicy: async (userId, policyId) => {
-    // backend devuelve 204, axios igual resuelve (data suele ser undefined)
-    const { data } = await api.delete(`/admin/accounts/users/${userId}/policies/${policyId}`);
+    const { data } = await api.delete(
+      `/admin/accounts/users/${userId}/policies/${policyId}/`
+    );
     return data;
   },
 };

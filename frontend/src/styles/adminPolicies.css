@@ -246,15 +246,24 @@
   color: #0f172a;
 }
 
-/* Modal */
+/* ✅ MODAL: que NO toque el nav y tenga aire arriba/abajo */
 .modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(2, 6, 23, 0.50);
+
+  /* clave: en vez de centrar vertical, lo arrancamos desde arriba */
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 18px;
+
+  /* aire real arriba para “pasar” el nav (ajustable) */
+  padding-top: 96px;     /* <- si tu nav es más alto, subilo a 110/120 */
+  padding-right: 16px;
+  padding-bottom: 28px;
+  padding-left: 16px;
+
+  overflow: hidden;
   z-index: 80;
 }
 
@@ -264,8 +273,15 @@
   border-radius: 16px;
   border: 1px solid rgba(15, 23, 42, 0.10);
   box-shadow: 0 26px 70px rgba(2, 6, 23, 0.35);
+
+  /* ✅ respeta el aire top/bottom definido arriba */
+  max-height: calc(100vh - (96px + 28px));
+
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
+
 
 .modal-header {
   display: flex;
@@ -275,6 +291,7 @@
   padding: 14px 14px;
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   background: rgba(13, 71, 161, 0.03);
+  flex: 0 0 auto;
 }
 
 .modal-title {
@@ -298,6 +315,17 @@
   color: #0f172a;
 }
 
+/* ✅ body: scrollea adentro del modal */
+.modal-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Si tu PolicyFormModal NO usa modal-body y usa .form directo,
+   igual lo hacemos scrolleable de forma segura */
 .form {
   padding: 14px;
   display: flex;
@@ -342,11 +370,14 @@
   font-size: 0.9rem;
 }
 
+/* ✅ acciones siempre abajo, sin empujar el modal a tocar bordes */
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  padding-top: 4px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  flex: 0 0 auto;
 }
 
 /* Info box */
@@ -406,12 +437,7 @@
 
 /* Modal más compacto */
 .modal-sm {
-  max-width: 520px;
-}
-
-/* Quitar scroll horizontal del modal */
-.modal-body {
-  overflow-x: hidden;
+  width: min(560px, 100%);
 }
 
 /* =========================

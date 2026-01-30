@@ -1,13 +1,24 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { adminPoliciesApi } from "@/services/adminPoliciesApi";
 
+/**
+ * LIST
+ * - Guarda status/http para poder autocorregir paginado fuera de rango (404)
+ * - Inyecta __page para mantener el page real pedido
+ */
 export const fetchAdminPolicies = createAsyncThunk(
   "adminPolicies/fetchList",
   async ({ page = 1 } = {}, { rejectWithValue }) => {
     try {
-      return await adminPoliciesApi.list({ page });
+      const data = await adminPoliciesApi.list({ page });
+      return { ...data, __page: page };
     } catch (e) {
-      return rejectWithValue(e?.response?.data || e?.message || "Error al listar pólizas");
+      return rejectWithValue({
+        status: e?.response?.status ?? 0,
+        data: e?.response?.data ?? null,
+        message: e?.message || "Error al listar pólizas",
+        page,
+      });
     }
   }
 );
@@ -66,7 +77,12 @@ const initialState = {
   count: 0,
   next: null,
   previous: null,
+
+  // page actual seleccionado en UI
   page: 1,
+
+  // ✅ ayuda para calcular lastPage (tu backend usa 10 por defecto en policies/pagination.py)
+  pageSize: 10,
 
   loadingList: false,
   loadingSave: false,
@@ -111,6 +127,11 @@ const adminPoliciesSlice = createSlice({
     setAdminPoliciesPage(state, action) {
       state.page = action.payload || 1;
     },
+    // opcional (si algún día querés soportar page_size desde UI)
+    setAdminPoliciesPageSize(state, action) {
+      const n = Number(action.payload);
+      state.pageSize = Number.isFinite(n) && n > 0 ? n : 10;
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -121,6 +142,10 @@ const adminPoliciesSlice = createSlice({
       })
       .addCase(fetchAdminPolicies.fulfilled, (state, action) => {
         state.loadingList = false;
+
+        // ✅ mantenemos coherente el page con lo que pedimos
+        state.page = action.payload?.__page ?? state.page;
+
         state.count = action.payload?.count ?? 0;
         state.next = action.payload?.next ?? null;
         state.previous = action.payload?.previous ?? null;
@@ -128,7 +153,19 @@ const adminPoliciesSlice = createSlice({
       })
       .addCase(fetchAdminPolicies.rejected, (state, action) => {
         state.loadingList = false;
-        state.errorList = action.payload || "Error al listar pólizas";
+
+        const payload = action.payload;
+
+        // ✅ Si el backend devuelve 404 por página fuera de rango (ej: page=4 y solo hay 3),
+        // retrocedemos una página y no mostramos error.
+        if (payload?.status === 404 && state.page > 1) {
+          state.page = Math.max(1, state.page - 1);
+          state.errorList = null;
+          return;
+        }
+
+        state.errorList =
+          payload?.data || payload?.message || "Error al listar pólizas";
       })
 
       // CREATE
@@ -191,7 +228,9 @@ const adminPoliciesSlice = createSlice({
 
         const updatedPolicy = coercePolicyFromResponse(action.payload);
         if (updatedPolicy?.id) {
-          state.list = state.list.map((p) => (p.id === updatedPolicy.id ? updatedPolicy : p));
+          state.list = state.list.map((p) =>
+            p.id === updatedPolicy.id ? updatedPolicy : p
+          );
         }
       })
       .addCase(markAdminPolicyPaid.rejected, (state, action) => {
@@ -201,5 +240,10 @@ const adminPoliciesSlice = createSlice({
   },
 });
 
-export const { clearAdminPoliciesErrors, setAdminPoliciesPage } = adminPoliciesSlice.actions;
+export const {
+  clearAdminPoliciesErrors,
+  setAdminPoliciesPage,
+  setAdminPoliciesPageSize,
+} = adminPoliciesSlice.actions;
+
 export default adminPoliciesSlice.reducer;

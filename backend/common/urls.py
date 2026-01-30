@@ -3,38 +3,52 @@ from rest_framework.routers import DefaultRouter
 
 from .views import ContactInfoView, AppSettingsView, AnnouncementViewSet
 
-# Router sin trailing slash; agregamos aliases manuales para compatibilidad legacy.
+# ======================================================
+# Router CANÓNICO (sin slash final)
+# Base según include: /api/common/
+#
+# Endpoints:
+#   /api/common/announcements
+#   /api/common/announcements/<pk>
+# ======================================================
 router = DefaultRouter(trailing_slash=False)
 router.register(r"announcements", AnnouncementViewSet, basename="announcements")
 
 urlpatterns = [
-    # -------------------------
+    # ==================================================
     # Contact Info (público)
-    # -------------------------
-    path("contact-info", ContactInfoView.as_view(), name="contact-info-no-slash"),
-    path("contact-info/", ContactInfoView.as_view(), name="contact-info"),
+    # ==================================================
+    # Canónico sin slash (alineado con router)
+    path("contact-info", ContactInfoView.as_view(), name="contact-info"),
+    # Alias legacy con slash
+    path("contact-info/", ContactInfoView.as_view(), name="contact-info-slash"),
 
-    # -------------------------
-    # Admin Settings (admin)
-    # Nota: definimos ambas variantes (con y sin slash) para compatibilidad.
-    # Tu frontend hoy pega a /api/admin/settings/ (con slash).
-    # -------------------------
+    # ==================================================
+    # Admin Settings
+    # OJO: esto NO va bajo /api/common/admin,
+    # sino que se monta desde ROOT en /api/admin/settings
+    # pero dejamos esto por compatibilidad interna
+    # ==================================================
     path("admin/settings", AppSettingsView.as_view(), name="app-settings"),
-    path("admin/settings/", AppSettingsView.as_view(), name="app-settings-trailing-slash"),
+    path("admin/settings/", AppSettingsView.as_view(), name="app-settings-slash"),
 ]
 
-# Router endpoints sin slash final:
-#  - GET /announcements
-#  - GET /announcements/<pk>
-#  - etc.
+# ======================================================
+# Router endpoints (sin slash)
+# ======================================================
 urlpatterns += router.urls
 
-# Aliases legacy con trailing slash explícito para announcements
+# ======================================================
+# Aliases legacy CON slash para announcements
+# (para FE viejo que llama con / final)
+# ======================================================
 urlpatterns += [
     path(
         "announcements/",
-        AnnouncementViewSet.as_view({"get": "list", "post": "create"}),
-        name="announcements-list-trailing-slash",
+        AnnouncementViewSet.as_view(
+            {"get": "list", "post": "create"}
+        ),
+        name="announcements-list-slash",
     ),
     path(
         "announcements/<int:pk>/",
@@ -46,6 +60,6 @@ urlpatterns += [
                 "delete": "destroy",
             }
         ),
-        name="announcements-detail-trailing-slash",
+        name="announcements-detail-slash",
     ),
 ]
