@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import APIException
 from rest_framework.exceptions import APIException, ValidationError
 
 from accounts.models import User
@@ -265,6 +266,30 @@ class PolicySerializer(serializers.ModelSerializer):
             return None
         return BillingPeriodCurrentSerializer(period).data
 
+    def _sync_status_from_billing(self, obj, current_status):
+        # No tocar estados gestionados manualmente
+        if current_status in (Policy.Status.CANCELLED, Policy.Status.SUSPENDED, Policy.Status.INACTIVE):
+            return current_status
+
+        period = self._get_current_billing_period(obj)
+        billing_status = getattr(period, "status", None)
+        if not billing_status:
+            return current_status
+
+        try:
+            if billing_status == BillingPeriod.Status.OVERDUE:
+                return Policy.Status.EXPIRED
+            if billing_status in (BillingPeriod.Status.PAID, BillingPeriod.Status.UNPAID):
+                return Policy.Status.ACTIVE
+        except Exception:
+            status_upper = str(billing_status).upper()
+            if status_upper == "OVERDUE":
+                return Policy.Status.EXPIRED
+            if status_upper in ("PAID", "UNPAID"):
+                return Policy.Status.ACTIVE
+
+        return current_status
+
     # -------------------------
     # Timeline + adjustment cache
     # -------------------------
@@ -395,7 +420,10 @@ class PolicySerializer(serializers.ModelSerializer):
             self._ensure_contract_vehicle_snapshot(policy, vehicle_ref, vehicle_data)
 
             ensure_policy_end_date(policy)
-            ensure_current_billing_period(policy)
+            try:
+                ensure_current_billing_period(policy)
+            except Exception as exc:
+                raise APIException("No se pudo inicializar el periodo de facturación.") from exc
             return policy
 
     def update(self, instance, validated_data):
@@ -650,6 +678,7 @@ class PolicySerializer(serializers.ModelSerializer):
     # -------------------------
     def to_representation(self, instance):
         data = super().to_representation(instance)
+        data["status"] = self._sync_status_from_billing(instance, data.get("status"))
         # No pisar el write_only "vehicle": exponemos snapshot contractual
         data["vehicle"] = self._represent_policy_vehicle(getattr(instance, "contract_vehicle", None))
         return data
@@ -685,14 +714,13 @@ class AdminPolicyCreateSerializer(PolicySerializer):
                 {"detail": "No se puede modificar una póliza eliminada. Restaurala primero."}
             )
 
-        # number obligatorio en create
+        # number opcional en create: si viene, lo normalizamos y validamos
         if instance is None:
             raw_number = data.get("number", None)
-            if raw_number in (None, ""):
-                raise ValidationError({"number": "Indicá el número de póliza (ej: SC-1234)."})
-            normalized = self._normalize_number(raw_number)
-            self._validate_number_unique(normalized, instance=None)
-            data["number"] = normalized
+            if raw_number not in (None, ""):
+                normalized = self._normalize_number(raw_number)
+                self._validate_number_unique(normalized, instance=None)
+                data["number"] = normalized
 
         premium = data.get("premium", getattr(instance, "premium", None))
         if premium is None:

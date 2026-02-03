@@ -32,10 +32,11 @@ export const adminPoliciesApi = {
     return data;
   },
 
-  async listDeleted({ page = 1, page_size = 5 } = {}) {
+  async listDeleted({ page = 1, page_size = 5, search = "" } = {}) {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("page_size", String(page_size));
+    if (search) params.set("search", String(search).trim());
 
     // backend alias: /policies/deleted (y suele aceptar también /deleted/)
     const url = withQuery(`${BASE}/deleted`, params); // ✅ /deleted?page=...
@@ -78,9 +79,10 @@ export const adminPoliciesApi = {
   },
 
   // ✅ marcar como abonada (pago manual/admin)
-  async markPaid(id) {
+  async markPaid(id, { force = false } = {}) {
     if (!id) throw new Error("id requerido");
-    const { data } = await api.post(`${detail(id)}/mark-paid`);
+    const payload = force ? { force: true } : {};
+    const { data } = await api.post(`${detail(id)}/mark-paid`, payload);
     return data;
   },
 

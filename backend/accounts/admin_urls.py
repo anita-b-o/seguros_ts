@@ -17,6 +17,8 @@ admin_users_detail_view = AdminUserViewSet.as_view(
         "delete": "destroy",
     }
 )
+admin_users_deleted_view = AdminUserViewSet.as_view({"get": "deleted"})
+admin_users_restore_view = AdminUserViewSet.as_view({"post": "restore"})
 admin_users_me_view = AdminUserViewSet.as_view(
     {"get": "me", "patch": "me", "put": "me"},
 )
@@ -33,6 +35,8 @@ urlpatterns = router.urls + [
     # compat legacy con slash
     path("users/", admin_users_list_view, name="admin-users-list-slash"),
     path("users/<int:pk>/", admin_users_detail_view, name="admin-users-detail-slash"),
+    path("users/deleted/", admin_users_deleted_view, name="admin-users-deleted-slash"),
+    path("users/<int:pk>/restore/", admin_users_restore_view, name="admin-users-restore-slash"),
     path("users/me/", admin_users_me_view, name="admin-users-me-slash"),
 
     # sin slash

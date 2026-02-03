@@ -84,7 +84,7 @@ class CreatePreferenceTests(APITestCase):
     @mock.patch.dict("os.environ", {"MP_ACCESS_TOKEN": "dummy"})
     @mock.patch("payments.views._mp_create_preference")
     def test_allows_overdue_period(self, mock_mp_create):
-        # NOTE: Current behavior allows paying overdue periods and marks them OVERDUE + suspends policy.
+        # NOTE: Current behavior allows paying overdue periods and marks them OVERDUE + expires policy.
         # If business rules change to block overdue payments, update both view and this test.
         mock_mp_create.return_value = ({"id": "pref-3", "init_point": "http://pay"}, "")
         self.billing_period.due_date_hard = timezone.localdate() - timedelta(days=1)
@@ -95,7 +95,7 @@ class CreatePreferenceTests(APITestCase):
         self.billing_period.refresh_from_db()
         self.assertEqual(self.billing_period.status, BillingPeriod.Status.OVERDUE)
         self.policy.refresh_from_db()
-        self.assertEqual(self.policy.status, "suspended")
+        self.assertEqual(self.policy.status, "expired")
 
 
 class MpWebhookTests(APITestCase):

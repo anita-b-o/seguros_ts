@@ -88,6 +88,19 @@ export const policiesApi = {
     const { data } = await api.post("/policies/claim", { number });
     return data;
   },
+
+  // -----------------------
+  // Asociar póliza (self-service)
+  // -----------------------
+  async associateMyPolicy({ policyNumber }) {
+    const policy_number = (policyNumber || "").trim();
+    if (!policy_number) throw new Error("associateMyPolicy: policyNumber es requerido");
+
+    const { data } = await api.post("/accounts/users/me/policies/associate", {
+      policy_number,
+    });
+    return data;
+  },
 };
 
 export default policiesApi;

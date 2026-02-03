@@ -19,7 +19,7 @@ from audit.helpers import audit_log, snapshot_entity
 from common.models import AppSettings
 from policies.models import Policy
 
-from .models import BillingPeriod
+from .models import BillingPeriod, Payment
 
 DEFAULT_BILLING_PERIOD_CURRENCY = "ARS"
 
@@ -162,6 +162,8 @@ def get_or_create_current_period(policy: Policy, *, now: Optional[date] = None) 
 
     period = BillingPeriod.objects.filter(policy=policy, period_start=period_start).first()
     if period:
+        if period.due_date_hard and today > period.due_date_hard:
+            return period
         updates = {}
         if period.period_end != period_end:
             updates["period_end"] = period_end
@@ -225,24 +227,24 @@ def ensure_current_billing_period(policy: Policy, *, now: Optional[date] = None)
     (reactiva si corresponde y la póliza no está cancelada).
     """
     today = now or timezone.localdate()
+    if policy.status not in ("cancelled", "inactive") and policy.status != "active":
+        reactivate_policy_if_applicable(policy)
     period = get_or_create_current_period(policy, now=today)
     if not period:
         return None
-    if policy.status not in ("cancelled", "inactive"):
-        reactivate_policy_if_applicable(policy)
     return period
 
 
-def _suspend_policy_if_applicable(policy: Policy) -> bool:
+def _expire_policy_if_applicable(policy: Policy) -> bool:
     if policy.status in ("cancelled", "inactive"):
         return False
-    if policy.status == "suspended":
+    if policy.status == "expired":
         return False
     before = snapshot_entity(policy)
-    policy.status = "suspended"
+    policy.status = "expired"
     policy.save(update_fields=["status", "updated_at"])
     audit_log(
-        action="policy_suspended_for_overdue",
+        action="policy_expired_for_overdue",
         entity_type="Policy",
         entity_id=str(policy.pk),
         before=before,
@@ -258,8 +260,27 @@ def reactivate_policy_if_applicable(policy: Policy) -> bool:
     if policy.status == "active":
         return False
     before = snapshot_entity(policy)
+    today = timezone.localdate()
+    settings_obj = AppSettings.get_solo()
+    term_months = int(getattr(settings_obj, "default_term_months", 0) or 0)
+    end_date = _add_months(today, term_months) if term_months > 0 else policy.end_date
     policy.status = "active"
-    policy.save(update_fields=["status", "updated_at"])
+    policy.start_date = today
+    policy.end_date = end_date
+    policy.save(update_fields=["status", "start_date", "end_date", "updated_at"])
+    stale_periods = (
+        BillingPeriod.objects.filter(policy=policy)
+        .exclude(status=BillingPeriod.Status.PAID)
+        .exclude(payments__state="APR")
+        .distinct()
+    )
+    if stale_periods.exists():
+        Payment.objects.filter(billing_period__in=stale_periods).exclude(state="APR").delete()
+        stale_periods.delete()
+    current_period = get_or_create_current_period(policy, now=today)
+    if current_period and current_period.status != BillingPeriod.Status.UNPAID:
+        current_period.status = BillingPeriod.Status.UNPAID
+        current_period.save(update_fields=["status", "updated_at"])
     audit_log(
         action="policy_reactivated_after_payment",
         entity_type="Policy",
@@ -275,16 +296,18 @@ def mark_overdue_and_suspend_if_needed(
     policy: Policy, period: BillingPeriod, *, now: Optional[date] = None
 ) -> bool:
     """
-    Marca el periodo como OVERDUE y suspende la póliza si corresponde.
+    Marca el periodo como OVERDUE y vence la póliza si corresponde.
     El servicio de pagos puede seguir permitiendo cobros para reactivar la póliza.
     """
     today = now or timezone.localdate()
+    if period.status == BillingPeriod.Status.OVERDUE:
+        return _expire_policy_if_applicable(policy)
     if period.status != BillingPeriod.Status.UNPAID:
         return False
     if period.due_date_hard and today > period.due_date_hard:
         period.status = BillingPeriod.Status.OVERDUE
         period.save(update_fields=["status", "updated_at"])
-        _suspend_policy_if_applicable(policy)
+        _expire_policy_if_applicable(policy)
         return True
     return False
 

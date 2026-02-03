@@ -8,16 +8,17 @@ import { adminPoliciesApi } from "@/services/adminPoliciesApi";
  */
 export const fetchAdminPolicies = createAsyncThunk(
   "adminPolicies/fetchList",
-  async ({ page = 1 } = {}, { rejectWithValue }) => {
+  async ({ page = 1, search = "" } = {}, { rejectWithValue }) => {
     try {
-      const data = await adminPoliciesApi.list({ page });
-      return { ...data, __page: page };
+      const data = await adminPoliciesApi.list({ page, search });
+      return { ...data, __page: page, __search: search };
     } catch (e) {
       return rejectWithValue({
         status: e?.response?.status ?? 0,
         data: e?.response?.data ?? null,
         message: e?.message || "Error al listar pólizas",
         page,
+        search,
       });
     }
   }
@@ -60,10 +61,12 @@ export const deleteAdminPolicy = createAsyncThunk(
 // ✅ NUEVO: marcar como abonada desde admin
 export const markAdminPolicyPaid = createAsyncThunk(
   "adminPolicies/markPaid",
-  async (id, { rejectWithValue }) => {
+  async (payload, { rejectWithValue }) => {
     try {
+      const id = typeof payload === "object" ? payload?.id : payload;
+      const force = typeof payload === "object" ? payload?.force : false;
       // backend puede devolver { detail, payment_id, receipt_id, policy }
-      return await adminPoliciesApi.markPaid(id);
+      return await adminPoliciesApi.markPaid(id, { force });
     } catch (e) {
       return rejectWithValue(
         e?.response?.data || e?.message || "Error al marcar como abonada"
@@ -80,6 +83,7 @@ const initialState = {
 
   // page actual seleccionado en UI
   page: 1,
+  q: "",
 
   // ✅ ayuda para calcular lastPage (tu backend usa 10 por defecto en policies/pagination.py)
   pageSize: 10,
@@ -127,6 +131,10 @@ const adminPoliciesSlice = createSlice({
     setAdminPoliciesPage(state, action) {
       state.page = action.payload || 1;
     },
+    setAdminPoliciesQuery(state, action) {
+      state.q = action.payload;
+      state.page = 1;
+    },
     // opcional (si algún día querés soportar page_size desde UI)
     setAdminPoliciesPageSize(state, action) {
       const n = Number(action.payload);
@@ -145,6 +153,7 @@ const adminPoliciesSlice = createSlice({
 
         // ✅ mantenemos coherente el page con lo que pedimos
         state.page = action.payload?.__page ?? state.page;
+        state.q = action.payload?.__search ?? state.q;
 
         state.count = action.payload?.count ?? 0;
         state.next = action.payload?.next ?? null;
@@ -244,6 +253,7 @@ export const {
   clearAdminPoliciesErrors,
   setAdminPoliciesPage,
   setAdminPoliciesPageSize,
+  setAdminPoliciesQuery,
 } = adminPoliciesSlice.actions;
 
 export default adminPoliciesSlice.reducer;

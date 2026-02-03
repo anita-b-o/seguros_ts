@@ -195,6 +195,7 @@ class Command(BaseCommand):
                     "end_date": pdata["end_date"],
                     "status": pdata["status"],
                     "claim_code": pdata["claim_code"],
+                    "holder_dni": getattr(pdata["user"], "dni", None),
                 },
             )
             ensure_policy_vehicle(policy, pdata["vehicle"])

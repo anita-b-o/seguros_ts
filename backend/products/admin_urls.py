@@ -18,6 +18,8 @@ admin_insurance_detail_view = ProductAdminViewSet.as_view(
         "delete": "destroy",
     }
 )
+admin_insurance_deleted_view = ProductAdminViewSet.as_view({"get": "deleted"})
+admin_insurance_restore_view = ProductAdminViewSet.as_view({"post": "restore"})
 
 urlpatterns = router.urls + [
     path(
@@ -29,5 +31,25 @@ urlpatterns = router.urls + [
         "insurance-types/<int:pk>/",
         admin_insurance_detail_view,
         name="admin-insurance-types-detail-slash",
+    ),
+    path(
+        "insurance-types/<int:pk>/restore/",
+        admin_insurance_restore_view,
+        name="admin-insurance-types-restore-slash",
+    ),
+    path(
+        "insurance-types/<int:pk>/restore",
+        admin_insurance_restore_view,
+        name="admin-insurance-types-restore-noslash",
+    ),
+    path(
+        "insurance-types/deleted/",
+        admin_insurance_deleted_view,
+        name="admin-insurance-types-deleted-slash",
+    ),
+    path(
+        "insurance-types/deleted",
+        admin_insurance_deleted_view,
+        name="admin-insurance-types-deleted-noslash",
     ),
 ]

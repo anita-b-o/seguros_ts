@@ -31,6 +31,7 @@ class ClaimPolicyTests(APITestCase):
             premium=10000,
             status="active",
             claim_code="CLAIM-CODE",
+            holder_dni=self.user.dni,
         )
 
     def test_claim_policy_assigns_user(self):

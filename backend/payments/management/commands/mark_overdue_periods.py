@@ -6,7 +6,7 @@ from payments.models import BillingPeriod
 
 
 class Command(BaseCommand):
-    help = "Marca periodos de facturación vencidos y suspende automáticamente las pólizas."
+    help = "Marca periodos de facturación vencidos y vence automáticamente las pólizas."
 
     def handle(self, *args, **options):
         today = timezone.localdate()

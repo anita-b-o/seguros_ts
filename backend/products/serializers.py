@@ -49,6 +49,8 @@ class AdminProductSerializer(ProductSerializer):
             "published_home",
             "home_order",
             "is_active",
+            "is_deleted",
+            "deleted_at",
             "policy_count",
         )
         extra_kwargs = {
@@ -65,6 +67,8 @@ class AdminProductSerializer(ProductSerializer):
             "bullets": {"required": False},
             "code": {"required": False, "allow_blank": True, "allow_null": True},
             "subtitle": {"required": False, "allow_blank": True},
+            "is_deleted": {"read_only": True},
+            "deleted_at": {"read_only": True},
         }
 
     def _apply_defaults(self, data, instance=None):

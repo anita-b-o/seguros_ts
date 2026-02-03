@@ -160,9 +160,21 @@ def _policy_timeline(policy, *, settings_obj=None, period=None):
     }
 
 
-def _client_status(status, client_end, real_end, payment_end=None):
+def _client_status(status, client_end, real_end, payment_end=None, billing_status=None):
     if status in ["cancelled", "inactive", "suspended"]:
         return status
+    if billing_status:
+        try:
+            if billing_status == BillingPeriod.Status.OVERDUE:
+                return "expired"
+            if billing_status in (BillingPeriod.Status.PAID, BillingPeriod.Status.UNPAID):
+                return "active"
+        except Exception:
+            s = str(billing_status).upper()
+            if s == "OVERDUE":
+                return "expired"
+            if s in ("PAID", "UNPAID"):
+                return "active"
     today = date.today()
 
     def _to_date(v):
@@ -352,9 +364,11 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
 
         now = timezone.localdate()
         timeline_map = {}
+        billing_status_map = {}
         for policy in policies:
             period = _ensure_current_cycle(policy, now=now, allow_create=True)
             timeline_map[policy.id] = _policy_timeline(policy, settings_obj=settings_obj, period=period)
+            billing_status_map[policy.id] = getattr(period, "status", None) if period else None
 
         serializer = PolicyClientListSerializer(
             policies,
@@ -376,6 +390,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
                 cid,
                 timeline.get("real_end_date"),
                 timeline.get("payment_end_date"),
+                billing_status_map.get(item["id"]),
             )
         return Response(data)
 
@@ -409,9 +424,11 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
 
         # Dropdown: sin side-effects masivos
         timeline_map_list = {}
+        billing_status_map_list = {}
         for p in policies:
             period = _ensure_current_cycle(p, now=now, allow_create=False)
             timeline_map_list[p.id] = _policy_timeline(p, settings_obj=settings_obj, period=period)
+            billing_status_map_list[p.id] = getattr(period, "status", None) if period else None
 
         list_ser = PolicyClientListSerializer(
             policies,
@@ -433,6 +450,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
                 cid,
                 tl.get("real_end_date"),
                 tl.get("payment_end_date"),
+                billing_status_map_list.get(item["id"]),
             )
 
         # Seleccionada: detalle + billing_current (permitimos crear)
@@ -456,6 +474,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
             cid,
             selected_timeline.get("real_end_date"),
             selected_timeline.get("payment_end_date"),
+            getattr(selected_period, "status", None) if selected_period else None,
         )
 
         billing_current = BillingPeriodCurrentSerializer(selected_period).data if selected_period else None
@@ -497,6 +516,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
             cid,
             timeline.get("real_end_date"),
             timeline.get("payment_end_date"),
+            getattr(period, "status", None) if period else None,
         )
         return Response(data)
 
@@ -531,6 +551,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
             cid,
             timeline.get("real_end_date"),
             timeline.get("payment_end_date"),
+            getattr(period, "status", None) if period else None,
         )
         return Response(data)
 
@@ -547,6 +568,10 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
             return Response({"detail": "No encontrada."}, status=404)
 
         qs = Receipt.objects.filter(policy=policy).order_by("-date", "-id")
+
+        if "page" not in request.query_params and "page_size" not in request.query_params:
+            serializer = ReceiptSerializer(qs, many=True, context={"request": request})
+            return Response(serializer.data)
 
         paginator = ReceiptsPagination()
         page = paginator.paginate_queryset(qs, request, view=self)
@@ -577,7 +602,18 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         _ensure_current_cycle(policy)
 
         if policy.user_id and policy.user_id != request.user.id:
-            return Response({"detail": "Esta póliza ya pertenece a otro usuario."}, status=400)
+            return Response(
+                {"detail": "Esta póliza ya pertenece a otro usuario."},
+                status=409,
+            )
+
+        holder_dni = (getattr(policy, "holder_dni", None) or "").strip()
+        user_dni = str(getattr(request.user, "dni", "")).strip()
+        if holder_dni and holder_dni != user_dni:
+            return Response(
+                {"detail": "El DNI no coincide con el titular de la póliza."},
+                status=403,
+            )
 
         product = policy.product
         vehicle = getattr(policy, "contract_vehicle", None)
@@ -631,16 +667,26 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         adjustment_end = timeline.get("adjustment_to")
         in_adjustment_window = _date_in_window(adjustment_start, adjustment_end)
 
-        if premium_changed and prev_end and in_adjustment_window:
+        should_override_dates = premium_changed and prev_end and in_adjustment_window
+        new_start = None
+        new_end = None
+
+        if should_override_dates:
             term_months = int(getattr(settings_obj, "default_term_months", 0) or 0)
             if term_months <= 0:
                 term_months = 3
+            # En ajuste, la nueva vigencia arranca en el vencimiento anterior (no en "hoy")
             new_start = prev_end
             new_end = _add_months(prev_end, term_months)
             data["start_date"] = new_start
             data["end_date"] = new_end
 
-        serializer.save()
+        instance = serializer.save()
+
+        if should_override_dates and new_start and new_end:
+            instance.start_date = new_start
+            instance.end_date = new_end
+            instance.save(update_fields=["start_date", "end_date", "updated_at"])
 
 
 class PolicyViewSet(PolicyBaseViewSet):
@@ -897,7 +943,8 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         if not period:
             return Response({"detail": "No hay periodo vigente para cobrar."}, status=400)
 
-        if getattr(period, "due_date_hard", None) and today > period.due_date_hard:
+        force = bool(request.data.get("force")) if hasattr(request, "data") else False
+        if not force and getattr(period, "due_date_hard", None) and today > period.due_date_hard:
             return Response(
                 {
                     "detail": "Fuera de la ventana de pago. No se puede marcar como abonada.",
@@ -988,6 +1035,9 @@ class AdminPolicyViewSet(AuditModelViewSetMixin, PolicyBaseViewSet):
         )
 
     def perform_destroy(self, instance):
+        if instance.user_id:
+            instance.user = None
+            instance.save(update_fields=["user", "updated_at"])
         _soft_delete_policy(instance)
 
     @action(detail=False, methods=["get"], url_path="adjustment-count")

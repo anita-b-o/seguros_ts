@@ -12,4 +12,9 @@ export const quotesApi = {
     });
     return res.data;
   },
+  async getShare(token) {
+    if (!token) throw new Error("token requerido");
+    const res = await apiPublic.get(`/quotes/share/${token}`);
+    return res.data;
+  },
 };

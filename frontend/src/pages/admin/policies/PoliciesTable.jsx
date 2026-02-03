@@ -21,8 +21,20 @@ export default function PoliciesTable({
     return null;
   };
 
-  // ✅ Quitamos columnas: Período pago / Vence visible / Vence real / Ajuste
-  const COLS = 8;
+  const statusLabel = (raw) => {
+    const key = String(raw || "").toLowerCase();
+    const map = {
+      active: "Activa",
+      expired: "Vencida",
+      cancelled: "Cancelada",
+      suspended: "Suspendida",
+      unknown: "Desconocido",
+    };
+    return map[key] || (raw ? String(raw) : "Desconocido");
+  };
+
+  // ✅ Quitamos columnas: Billing
+  const COLS = 7;
 
   return (
     <div className="table-card">
@@ -39,11 +51,10 @@ export default function PoliciesTable({
             <tr>
               <th>Número</th>
               <th>Producto</th>
-              <th>Premium</th>
-              <th>Status</th>
-              <th>Billing</th>
+              <th>Monto</th>
+              <th>Estado</th>
               <th>Vigencia</th>
-              <th>Pendiente</th>
+              <th>Pagó</th>
               <th style={{ textAlign: "right" }}>Acciones</th>
             </tr>
           </thead>
@@ -68,6 +79,7 @@ export default function PoliciesTable({
                 // Pendiente: robusto ante null/undefined y compat con posibles claves alternativas
                 const pending =
                   pickFirst(p, ["has_pending_charge", "pending", "is_pending"]) ?? false;
+                const paid = !Boolean(pending);
 
                 // Período de ajuste (backend-first)
                 const isInAdjustment = Boolean(
@@ -94,23 +106,17 @@ export default function PoliciesTable({
 
                     <td>
                       <span className={`badge ${p.status || "unknown"}`}>
-                        {p.status || "unknown"}
-                      </span>
-                    </td>
-
-                    <td>
-                      <span className={`badge ${String(p.billing_status || "unknown")}`}>
-                        {p.billing_status || "unknown"}
+                        {statusLabel(p.status)}
                       </span>
                     </td>
 
                     <td className="mono">{vigRange}</td>
 
                     <td>
-                      {Boolean(pending) ? (
-                        <span className="pill danger">Sí</span>
+                      {paid ? (
+                        <span className="pill ok">Sí</span>
                       ) : (
-                        <span className="pill ok">No</span>
+                        <span className="pill danger">No</span>
                       )}
                     </td>
 

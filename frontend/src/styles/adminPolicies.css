@@ -494,3 +494,41 @@
 .row-clickable:hover {
   background: rgba(15, 23, 42, 0.03);
 }
+
+/* =========================
+   Info box en filas (label | value)
+   ========================= */
+
+.info-box--rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: center;
+}
+
+/* label */
+.info-row .info-k {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* valor pegado al borde derecho */
+.info-row .info-v {
+  font-size: 14px;
+  font-weight: 500;
+  color: #000;
+  justify-self: end;       /* 🔑 esto lo pega a la derecha */
+  text-align: right;       /* texto alineado a la derecha */
+  word-break: break-word;
+}
+
+/* Opcional: monospace más prolijo */
+.info-row .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

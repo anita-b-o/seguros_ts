@@ -18,6 +18,23 @@ export const fetchAdminUsers = createAsyncThunk(
   }
 );
 
+export const deleteAdminUser = createAsyncThunk(
+  "adminUsers/delete",
+  async (id, { rejectWithValue }) => {
+    try {
+      await adminUsersApi.remove(id);
+      return id;
+    } catch (e) {
+      const detail =
+        e?.response?.data?.detail ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Error desconocido";
+      return rejectWithValue(detail);
+    }
+  }
+);
+
 const initialState = {
   list: [],
   count: 0,
@@ -25,6 +42,7 @@ const initialState = {
   pageSize: 10,
   q: "",
   loadingList: false,
+  loadingDelete: false,
   errorList: "",
 };
 
@@ -77,6 +95,20 @@ const adminUsersSlice = createSlice({
         state.list = [];
         state.count = 0;
         state.errorList = action.payload || "Error cargando usuarios.";
+      })
+      .addCase(deleteAdminUser.pending, (state) => {
+        state.loadingDelete = true;
+        state.errorList = "";
+      })
+      .addCase(deleteAdminUser.fulfilled, (state, action) => {
+        state.loadingDelete = false;
+        const id = action.payload;
+        state.list = state.list.filter((u) => u.id !== id);
+        state.count = Math.max(0, state.count - 1);
+      })
+      .addCase(deleteAdminUser.rejected, (state, action) => {
+        state.loadingDelete = false;
+        state.errorList = action.payload || "Error eliminando usuario.";
       });
   },
 });

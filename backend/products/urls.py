@@ -17,6 +17,7 @@ admin_router.register(r"insurance-types", ProductAdminViewSet, basename="admin-i
 # =========================
 list_view = ProductViewSet.as_view({"get": "list"})
 detail_view = ProductViewSet.as_view({"get": "retrieve"})
+admin_deleted_view = ProductAdminViewSet.as_view({"get": "deleted"})
 
 urlpatterns = [
     path("", list_view, name="products-list"),
@@ -29,3 +30,7 @@ urlpatterns = [
 
 # Admin endpoints
 urlpatterns += admin_router.urls
+urlpatterns += [
+    path("insurance-types/deleted/", admin_deleted_view, name="admin-insurance-types-deleted-slash"),
+    path("insurance-types/deleted", admin_deleted_view, name="admin-insurance-types-deleted-noslash"),
+]

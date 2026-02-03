@@ -100,7 +100,10 @@ export default function AssociatePolicyPage() {
 
         {lastAssociated ? (
           <div className="ap-alert ap-alert-ok">
-            <strong>Póliza asociada correctamente.</strong> Ya podés verla en tu panel.
+            <strong>{lastAssociated?.message || "Póliza asociada correctamente."}</strong>{" "}
+            {lastAssociated?.message
+              ? null
+              : "Ya podés verla en tu panel."}
           </div>
         ) : null}
 
@@ -125,7 +128,9 @@ export default function AssociatePolicyPage() {
             {validationError ? (
               <div className="dash-hint ap-help ap-error">{validationError}</div>
             ) : (
-              <div className="dash-hint ap-help">Usá el número tal como figura en el comprobante.</div>
+              <div className="dash-hint ap-help">
+                Solo podés asociar pólizas sin cliente asignado.
+              </div>
             )}
           </div>
 

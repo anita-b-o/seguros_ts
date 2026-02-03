@@ -40,8 +40,7 @@ export default function BillingCurrentPanel({ state }) {
               Período vigente {bp.period_code ? `(${bp.period_code})` : ""}
             </div>
             <div className="rcpt-pendingSub">
-              Vence (cliente): <strong>{fmtDate(bp.due_date_soft)}</strong> · Cierre real:{" "}
-              <strong>{fmtDate(bp.due_date_hard)}</strong>
+              Vence (cliente): <strong>{fmtDate(bp.due_date_soft)}</strong>
             </div>
           </div>
           <div className="rcpt-pendingAmount">

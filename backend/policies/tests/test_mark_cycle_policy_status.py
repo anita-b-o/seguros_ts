@@ -39,9 +39,9 @@ class BillingPeriodOverduePolicyStatusTests(TestCase):
             status=BillingPeriod.Status.UNPAID,
         )
 
-    def test_overdue_period_suspends_policy(self):
+    def test_overdue_period_expires_policy(self):
         mark_overdue_and_suspend_if_needed(self.policy, self.period, now=date.today())
         self.policy.refresh_from_db()
         self.period.refresh_from_db()
-        self.assertEqual(self.policy.status, "suspended")
+        self.assertEqual(self.policy.status, "expired")
         self.assertEqual(self.period.status, BillingPeriod.Status.OVERDUE)

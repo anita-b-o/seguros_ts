@@ -15,6 +15,17 @@ export const adminUsersApi = {
     return data;
   },
 
+  listDeleted: async ({ page = 1, page_size = 5, q = "" } = {}) => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("page_size", String(page_size));
+    if (q && String(q).trim()) params.set("search", String(q).trim());
+
+    const url = `/admin/accounts/users/deleted/?${params.toString()}`;
+    const { data } = await api.get(url);
+    return data;
+  },
+
   get: async (id) => {
     const { data } = await api.get(`/admin/accounts/users/${id}/`);
     return data;
@@ -36,6 +47,16 @@ export const adminUsersApi = {
     const { data } = await api.delete(
       `/admin/accounts/users/${userId}/policies/${policyId}/`
     );
+    return data;
+  },
+
+  remove: async (id) => {
+    await api.delete(`/admin/accounts/users/${id}/`);
+    return true;
+  },
+
+  restore: async (id) => {
+    const { data } = await api.post(`/admin/accounts/users/${id}/restore/`);
     return data;
   },
 };

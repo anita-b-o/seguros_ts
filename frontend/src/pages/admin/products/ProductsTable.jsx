@@ -1,10 +1,10 @@
 // src/pages/admin/products/ProductsTable.jsx
 import "@/styles/adminPolicies.css";
 
-function fmtRange(a, b) {
-  if (!a && !b) return "-";
-  if (a && b) return `${a} → ${b}`;
-  return a || b || "-";
+function formatBullets(items) {
+  const list = Array.isArray(items) ? items.filter((x) => String(x).trim()) : [];
+  if (list.length === 0) return "-";
+  return list.join(", ");
 }
 
 export default function ProductsTable({ products = [], loading, onEdit, onDelete }) {
@@ -19,47 +19,35 @@ export default function ProductsTable({ products = [], loading, onEdit, onDelete
         <table className="table">
           <thead>
             <tr>
-              <th>Código</th>
               <th>Nombre</th>
-              <th>Plan</th>
-              <th>Vehículo</th>
-              <th>Años</th>
-              <th>Precio base</th>
-              <th>Visible Home</th>
-              <th>Activo</th>
+              <th>Descripción</th>
+              <th>Características</th>
+              <th>Visible en Home</th>
               <th style={{ textAlign: "right" }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="td-muted">
+                <td colSpan={5} className="td-muted">
                   Cargando…
                 </td>
               </tr>
             ) : products.length === 0 ? (
               <tr>
-                <td colSpan={9} className="td-muted">
+                <td colSpan={5} className="td-muted">
                   No hay productos para mostrar.
                 </td>
               </tr>
             ) : (
               products.map((p) => (
                 <tr key={p.id}>
-                  <td className="mono">{p.code || "-"}</td>
                   <td>{p.name || "-"}</td>
-                  <td className="mono">{p.plan_type || "-"}</td>
-                  <td className="mono">{p.vehicle_type || "-"}</td>
-                  <td className="mono">{fmtRange(p.min_year, p.max_year)}</td>
-                  <td className="mono">{p.base_price ?? "-"}</td>
+                  <td>{p.subtitle || "-"}</td>
+                  <td>{formatBullets(p.bullets)}</td>
                   <td>
                     <span className={`pill ${p.published_home ? "ok" : "danger"}`}>
                       {p.published_home ? "Sí" : "No"}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={`pill ${p.is_active ? "ok" : "danger"}`}>
-                      {p.is_active ? "Sí" : "No"}
                     </span>
                   </td>
                   <td style={{ textAlign: "right" }}>

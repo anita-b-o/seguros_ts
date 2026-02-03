@@ -34,6 +34,28 @@ urlpatterns = [
         UserViewSet.as_view({"get": "me", "patch": "me", "put": "me"}),
         name="users-me",
     ),
+    # /users/me/policies/associate (compat con y sin slash)
+    path(
+        "users/me/policies/associate/",
+        UserViewSet.as_view({"post": "associate_policy"}),
+        name="users-me-policies-associate-slash",
+    ),
+    path(
+        "users/me/policies/associate",
+        UserViewSet.as_view({"post": "associate_policy"}),
+        name="users-me-policies-associate",
+    ),
+    # /users/me/policies/<policy_id>/detach (compat con y sin slash)
+    path(
+        "users/me/policies/<int:policy_id>/detach/",
+        UserViewSet.as_view({"post": "detach_policy"}),
+        name="users-me-policies-detach-slash",
+    ),
+    path(
+        "users/me/policies/<int:policy_id>/detach",
+        UserViewSet.as_view({"post": "detach_policy"}),
+        name="users-me-policies-detach",
+    ),
 
     # /users/me/change-password (compat con y sin slash)
     path(

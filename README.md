@@ -165,9 +165,10 @@ La variante `STRICT=1` falla si el código usa interpolaciones dinámicas (p. ej
 - Si alguien setea `VITE_API_BASE_URL` a `localhost`/`127.0.0.1` y construye para producción, la compilación falla con un mensaje claro: no permitimos que el bundle apunte a un backend local en ese entorno.
 
 ## Flujo operativo (cotización manual → póliza → asociación)
+**Nota de dominio:** la única fuente de verdad de la relación Usuario↔Póliza es `Policy.user_id` (asociar = setear `user_id`, desasociar = `NULL`).
 1. El cliente completa un formulario de cotización (información del vehículo + fotos) y lo envía al WhatsApp del negocio; no hay endpoint público automatizado para inspecciones.
 2. El responsable (admin) revisa ese formulario externamente y, desde el panel de administración, crea la póliza correspondiente, establece el monto y comparte con el cliente el **número de póliza** asignado.
-3. El cliente se registrará y, desde la sección **Asociar póliza** (`GET /claim-policy`), ingresará apenas ese número. El backend solo valida que exista la póliza y no esté vinculada a otro usuario, sin requerir códigos adicionales.
+3. El cliente se registrará y, desde la sección **Asociar póliza** (`GET /claim-policy`), ingresará el número de póliza y su DNI. El frontend llama a `POST /api/accounts/users/me/policies/associate` con `{ "policy_number", "dni" }`. El backend valida que la póliza esté libre, que el DNI coincida con el titular esperado y luego setea `policy.user_id`.
 4. Una vez asociada, el cliente puede pagar (`POST /api/payments/policies/{id}/create_preference`) y consultar recibos (`/api/payments/.../receipts`); Mercado Pago reporta a `/api/payments/webhook` con `MP_WEBHOOK_SECRET`.
 5. Los admins siguen pudiendo actualizar cuotas y reenviar onboarding (`POST /api/auth/onboarding/resend`), pero ya no hay `claim_code` obligatorio para asociar una póliza.
 

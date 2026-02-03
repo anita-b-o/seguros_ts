@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { adminPoliciesApi } from "@/services/adminPoliciesApi";
+import { quotesApi } from "@/services/quotesApi";
 import {
   clearAdminPoliciesErrors,
   createAdminPolicy,
   patchAdminPolicy,
   markAdminPolicyPaid,
+  fetchAdminPolicies,
 } from "@/features/adminPolicies/adminPoliciesSlice";
 import { api } from "@/api/http";
+import { useToast } from "@/contexts/ToastContext";
 
 function todayISO() {
   const d = new Date();
@@ -137,7 +140,8 @@ async function fetchAdminUsers({ page = 1, search = "" } = {}) {
 
 export default function PolicyFormModal({ open, onClose, policy }) {
   const dispatch = useDispatch();
-  const { loadingSave, loadingMarkPaid, fieldErrors, errorMarkPaid } = useSelector(
+  const { pushToast } = useToast();
+  const { loadingSave, loadingMarkPaid, fieldErrors, errorMarkPaid, page } = useSelector(
     (s) => s.adminPolicies
   );
 
@@ -154,9 +158,30 @@ export default function PolicyFormModal({ open, onClose, policy }) {
   const [userId, setUserId] = useState("");
   const [premium, setPremium] = useState("");
   const [startDate, setStartDate] = useState(todayISO());
+  const [status, setStatus] = useState("active");
+  const [originalStatus, setOriginalStatus] = useState("");
+  const [reactivateConfirmOpen, setReactivateConfirmOpen] = useState(false);
+  const [reactivateConfirmBusy, setReactivateConfirmBusy] = useState(false);
+  const [markPaidConfirmOpen, setMarkPaidConfirmOpen] = useState(false);
 
-  // ✅ flag local “pendiente de marcar abonada al guardar”
-  const [markPaidOnSave, setMarkPaidOnSave] = useState(false);
+  const [quoteLink, setQuoteLink] = useState("");
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState("");
+
+  const [vehicle, setVehicle] = useState({
+    plate: "",
+    make: "",
+    model: "",
+    year: "",
+    version: "",
+    city: "",
+    usage: "",
+    has_garage: false,
+    is_zero_km: false,
+    has_gnc: false,
+    gnc_amount: "",
+  });
+  const [vehicleError, setVehicleError] = useState("");
 
   const endDatePreview = useMemo(() => addMonthsISO(startDate, 3), [startDate]);
 
@@ -179,14 +204,35 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       setUserId(getPolicyUserId(policy)); // ✅ robusto: user_id / user.id / user_obj.id
       setPremium(policy?.premium != null ? String(policy.premium) : "");
       setStartDate(policy?.start_date || todayISO());
-      setMarkPaidOnSave(false);
+      setStatus(policy?.status || "active");
+      setOriginalStatus(policy?.status || "");
+      setQuoteLink("");
+      setQuoteError("");
+      setVehicleError("");
     } else {
       setNumber("");
       setProductId("");
       setUserId("");
       setPremium("");
       setStartDate(todayISO());
-      setMarkPaidOnSave(false);
+      setStatus("active");
+      setOriginalStatus("");
+      setQuoteLink("");
+      setQuoteError("");
+      setVehicleError("");
+      setVehicle({
+        plate: "",
+        make: "",
+        model: "",
+        year: "",
+        version: "",
+        city: "",
+        usage: "",
+        has_garage: false,
+        is_zero_km: false,
+        has_gnc: false,
+        gnc_amount: "",
+      });
     }
 
     let alive = true;
@@ -258,43 +304,62 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       ? "La póliza ya figura como pagada."
       : !inPayWindow
         ? "Fuera del período de pago."
-        : "Se aplicará al tocar Guardar.";
+        : "";
+
+  const onMarkPaidNow = async () => {
+    if (!isEdit || !canToggleMarkPaid) return;
+    setMarkPaidConfirmOpen(true);
+  };
 
   // ✅ Si el userId actual no está en el listado (filtros/paginación),
   // agregamos una opción “Cliente actual” para que el select muestre el valor.
   const selectedMissing =
     safeStr(userId).trim() && !users.some((u) => String(u.id) === String(userId));
 
+  const performEditSave = async () => {
+    const prevStatus = originalStatus || policy?.status || "";
+    const nextStatus = status;
+    const activating =
+      ["expired", "suspended", "cancelled"].includes(prevStatus) &&
+      nextStatus === "active";
+
+    if (activating && !reactivateConfirmOpen) {
+      setReactivateConfirmOpen(true);
+      return;
+    }
+
+    const payload = {
+      number: number.trim(),
+      premium: String(premium),
+    };
+
+    if (activating) {
+      payload.start_date = todayISO();
+    } else if (safeStr(startDate).trim()) {
+      payload.start_date = startDate;
+    }
+    if (safeStr(status).trim()) payload.status = status;
+
+    // ✅ permitir desasignar cliente: si userId === "" mandamos null
+    payload.user_id = safeStr(userId).trim() ? Number(userId) : null;
+
+    // 1) Guardar cambios primero
+    const resSave = await dispatch(patchAdminPolicy({ id: policy.id, payload }));
+    if (resSave.meta.requestStatus !== "fulfilled") return;
+
+    await dispatch(fetchAdminPolicies({ page }));
+
+    // 3) Cerrar modal solo si todo salió bien
+    onClose?.();
+  };
+
   const onSubmit = async (e) => {
     e.preventDefault();
     dispatch(clearAdminPoliciesErrors());
+    setVehicleError("");
 
     if (isEdit) {
-      const payload = {
-        number: number.trim(),
-        premium: String(premium),
-      };
-
-      if (safeStr(startDate).trim()) payload.start_date = startDate;
-
-      // ✅ permitir desasignar cliente: si userId === "" mandamos null
-      payload.user_id = safeStr(userId).trim() ? Number(userId) : null;
-
-      // 1) Guardar cambios primero
-      const resSave = await dispatch(patchAdminPolicy({ id: policy.id, payload }));
-      if (resSave.meta.requestStatus !== "fulfilled") return;
-
-      // 2) Si el usuario tildó “marcar abonada”, recién acá lo hacemos efectivo
-      if (markPaidOnSave) {
-        const resPaid = await dispatch(markAdminPolicyPaid(policy.id));
-        if (resPaid.meta.requestStatus !== "fulfilled") {
-          // no cerramos; se verá errorMarkPaid
-          return;
-        }
-      }
-
-      // 3) Cerrar modal solo si todo salió bien
-      onClose?.();
+      await performEditSave();
       return;
     }
 
@@ -311,17 +376,124 @@ export default function PolicyFormModal({ open, onClose, policy }) {
 
     if (safeStr(startDate).trim()) payload.start_date = startDate;
 
+    const hasVehicleInput = Object.values(vehicle).some((val) => {
+      if (typeof val === "boolean") return val;
+      return safeStr(val).trim();
+    });
+
+    if (hasVehicleInput) {
+      const missing = ["plate", "make", "model", "year"].filter(
+        (key) => !safeStr(vehicle[key]).trim()
+      );
+      if (missing.length) {
+        setVehicleError("Para adjuntar el vehículo, completá patente, marca, modelo y año.");
+      } else {
+        const payloadVehicle = {
+          plate: safeStr(vehicle.plate).trim(),
+          make: safeStr(vehicle.make).trim(),
+          model: safeStr(vehicle.model).trim(),
+          year: Number(vehicle.year),
+        };
+
+        if (safeStr(vehicle.version).trim()) {
+          payloadVehicle.version = safeStr(vehicle.version).trim();
+        }
+        if (safeStr(vehicle.city).trim()) payloadVehicle.city = safeStr(vehicle.city).trim();
+        if (safeStr(vehicle.usage).trim()) payloadVehicle.usage = safeStr(vehicle.usage).trim();
+        if (vehicle.has_garage) payloadVehicle.has_garage = true;
+        if (vehicle.is_zero_km) payloadVehicle.is_zero_km = true;
+        if (vehicle.has_gnc) payloadVehicle.has_gnc = true;
+        if (safeStr(vehicle.gnc_amount).trim()) {
+          payloadVehicle.gnc_amount = Number(vehicle.gnc_amount);
+        }
+
+        payload.vehicle = payloadVehicle;
+      }
+    }
+
     const res = await dispatch(createAdminPolicy(payload));
     if (res.meta.requestStatus === "fulfilled") {
+      await dispatch(fetchAdminPolicies({ page }));
       onClose?.();
       setNumber("");
       setProductId("");
       setUserId("");
       setPremium("");
       setStartDate(todayISO());
-      setMarkPaidOnSave(false);
     }
   };
+
+  const closeReactivateConfirm = () => {
+    if (reactivateConfirmBusy) return;
+    setReactivateConfirmOpen(false);
+  };
+
+  const runReactivateConfirm = async () => {
+    if (reactivateConfirmBusy) return;
+    setReactivateConfirmBusy(true);
+    setReactivateConfirmOpen(false);
+    await performEditSave();
+    setReactivateConfirmBusy(false);
+  };
+
+  const closeMarkPaidConfirm = () => {
+    if (loadingMarkPaid) return;
+    setMarkPaidConfirmOpen(false);
+  };
+
+  const runMarkPaidConfirm = async () => {
+    if (loadingMarkPaid) return;
+    setMarkPaidConfirmOpen(false);
+    const res = await dispatch(markAdminPolicyPaid({ id: policy.id }));
+    if (res.meta.requestStatus === "fulfilled") {
+      await dispatch(fetchAdminPolicies({ page }));
+      pushToast({ type: "success", message: "Póliza marcada como abonada." });
+      onClose?.();
+    } else {
+      pushToast({ type: "error", message: "No se pudo marcar como abonada." });
+    }
+  };
+
+  const extractQuoteToken = (raw) => {
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    const match = value.match(/quote\/share\/([^/?#]+)/i);
+    if (match?.[1]) return match[1];
+    const matchApi = value.match(/quotes\/share\/([^/?#]+)/i);
+    if (matchApi?.[1]) return matchApi[1];
+    return value;
+  };
+
+  const onLoadQuote = async () => {
+    setQuoteError("");
+    const token = extractQuoteToken(quoteLink);
+    if (!token) {
+      setQuoteError("Ingresá un link o token de cotización válido.");
+      return;
+    }
+    setQuoteLoading(true);
+    try {
+      const data = await quotesApi.getShare(token);
+      setVehicle((prev) => ({
+        ...prev,
+        make: data?.make || "",
+        model: data?.model || "",
+        version: data?.version || "",
+        year: data?.year != null ? String(data.year) : "",
+        city: data?.city || "",
+        usage: data?.usage || "",
+        has_garage: Boolean(data?.has_garage),
+        is_zero_km: Boolean(data?.is_zero_km),
+        has_gnc: Boolean(data?.has_gnc),
+        gnc_amount: data?.gnc_amount != null ? String(data.gnc_amount) : "",
+      }));
+    } catch (e) {
+      setQuoteError(e?.response?.data?.detail || "No se pudo cargar la cotización.");
+    } finally {
+      setQuoteLoading(false);
+    }
+  };
+
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -340,199 +512,535 @@ export default function PolicyFormModal({ open, onClose, policy }) {
           </button>
         </div>
 
-        {/* ✅ INFO EXTRA SOLO EN EDICIÓN */}
-        {isEdit ? (
-          <div className="table-card" style={{ padding: 12, marginBottom: 12 }}>
-            <div className="table-head" style={{ marginBottom: 10 }}>
-              <div className="table-title">Información extra</div>
-              <div className="table-muted">Datos calculados (solo lectura)</div>
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                gap: 10,
-              }}
-            >
-              <div>
-                <div className="info-k">Vigencia</div>
-                <div className="info-v mono">{vigRange}</div>
+        <div className="modal-body">
+          {/* ✅ INFO EXTRA SOLO EN EDICIÓN */}
+          {isEdit ? (
+            <div className="table-card" style={{ padding: 12, marginBottom: 12 }}>
+              <div className="table-head" style={{ marginBottom: 10 }}>
+                <div className="table-title">Información extra</div>
+                <div className="table-muted">Datos calculados (solo lectura)</div>
               </div>
 
-              <div>
-                <div className="info-k">Período pago</div>
-                <div className="info-v mono">{payRange}</div>
-              </div>
-
-              <div>
-                <div className="info-k">Vence (visible)</div>
-                <div className="info-v mono">{dueVisible}</div>
-              </div>
-
-              <div>
-                <div className="info-k">Vence (real)</div>
-                <div className="info-v mono">{dueReal}</div>
-              </div>
-
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div className="info-k">Ajuste</div>
-                <div className="info-v mono">{adjRange}</div>
-              </div>
-
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div className="info-k">Estado de cobro</div>
-                <div className="info-v">
-                  <span className="mono">
-                    {paid ? "PAID" : safeStr(policy?.billing_status || "UNPAID")}
-                  </span>
-                  {" · "}
-                  <span className="mono">
-                    {inPayWindow ? "Dentro de período" : "Fuera de período"}
-                  </span>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 10,
+                }}
+              >
+                <div>
+                  <div className="info-k">Vigencia</div>
+                  <div className="info-v mono">{vigRange}</div>
                 </div>
 
-                {errorMarkPaid ? (
-                  <div className="field-err" style={{ marginTop: 6 }}>
-                    {typeof errorMarkPaid === "string"
-                      ? errorMarkPaid
-                      : safeStr(errorMarkPaid?.detail || "No se pudo marcar como abonada")}
-                  </div>
-                ) : null}
-              </div>
+                <div>
+                  <div className="info-k">Período pago</div>
+                  <div className="info-v mono">{payRange}</div>
+                </div>
 
-              {/* ✅ toggle local (NO ejecuta nada hasta Guardar) */}
-              <div style={{ gridColumn: "1 / -1" }}>
-                <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    cursor: canToggleMarkPaid ? "pointer" : "not-allowed",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={markPaidOnSave}
-                    onChange={(e) => setMarkPaidOnSave(e.target.checked)}
+                <div>
+                  <div className="info-k">Vence (visible)</div>
+                  <div className="info-v mono">{dueVisible}</div>
+                </div>
+
+                <div>
+                  <div className="info-k">Vence (real)</div>
+                  <div className="info-v mono">{dueReal}</div>
+                </div>
+
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div className="info-k">Ajuste</div>
+                  <div className="info-v mono">{adjRange}</div>
+                </div>
+
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div className="info-k">Estado de cobro</div>
+                  <div className="info-v">
+                    <span className="mono">
+                      {paid ? "PAID" : safeStr(policy?.billing_status || "UNPAID")}
+                    </span>
+                    {" · "}
+                    <span className="mono">
+                      {inPayWindow ? "Dentro de período" : "Fuera de período"}
+                    </span>
+                  </div>
+
+                  {errorMarkPaid ? (
+                    <div className="field-err" style={{ marginTop: 6 }}>
+                      {typeof errorMarkPaid === "string"
+                        ? errorMarkPaid
+                        : safeStr(errorMarkPaid?.detail || "No se pudo marcar como abonada")}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    onClick={onMarkPaidNow}
                     disabled={!canToggleMarkPaid}
-                  />
-                  <span>
-                    Marcar como abonada <span className="table-muted">(al guardar)</span>
-                  </span>
+                  >
+                    Marcar como paga ahora
+                  </button>
+                  {markPaidHint ? (
+                    <div className="table-muted" style={{ marginTop: 6 }}>
+                      {markPaidHint}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <form className="form" onSubmit={onSubmit}>
+            <label className="form-label">
+              Número de póliza *
+              <input
+                className={`form-input ${getFieldErr("number") ? "is-invalid" : ""}`}
+                value={number}
+                onChange={(e) => setNumber(e.target.value)}
+                placeholder="SC-1234"
+                required
+              />
+              {getFieldErr("number") && <div className="field-err">{getFieldErr("number")}</div>}
+            </label>
+
+            <label className="form-label">
+              Monto *
+              <input
+                className={`form-input ${getFieldErr("premium") ? "is-invalid" : ""}`}
+                value={premium}
+                onChange={(e) => setPremium(e.target.value)}
+                required
+              />
+              {getFieldErr("premium") && <div className="field-err">{getFieldErr("premium")}</div>}
+            </label>
+
+            {isEdit ? (
+              <label className="form-label">
+                Estado
+                <select
+                  className={`form-input ${getFieldErr("status") ? "is-invalid" : ""}`}
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value)}
+                >
+                  <option value="active">Activa</option>
+                  <option value="expired">Vencida</option>
+                  <option value="suspended">Suspendida</option>
+                  <option value="cancelled">Cancelada</option>
+                </select>
+                {getFieldErr("status") && <div className="field-err">{getFieldErr("status")}</div>}
+              </label>
+            ) : null}
+
+            {!isEdit && (
+              <>
+                <div className="form-label">
+                  Link de cotización (opcional)
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <input
+                      className="form-input"
+                      value={quoteLink}
+                      onChange={(e) => setQuoteLink(e.target.value)}
+                      placeholder="https://.../quote/share/ABC123"
+                      disabled={quoteLoading}
+                    />
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={onLoadQuote}
+                      disabled={quoteLoading}
+                    >
+                      {quoteLoading ? "Cargando…" : "Cargar"}
+                    </button>
+                  </div>
+                  {quoteError ? <div className="field-err">{quoteError}</div> : null}
+                  <div className="table-muted" style={{ marginTop: 6 }}>
+                    Podés pegar el link completo o solo el token.
+                  </div>
+                </div>
+
+                <label className="form-label">
+                  Tipo de seguro
+                  <select
+                    className={`form-input ${getFieldErr("product_id") ? "is-invalid" : ""}`}
+                    value={productId}
+                    onChange={(e) => setProductId(e.target.value)}
+                    disabled={loadingProducts}
+                  >
+                    <option value="">
+                      {loadingProducts ? "Cargando productos…" : "Seleccionar…"}
+                    </option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name || `Producto #${p.id}`}
+                      </option>
+                    ))}
+                  </select>
+                  {getFieldErr("product_id") && (
+                    <div className="field-err">{getFieldErr("product_id")}</div>
+                  )}
                 </label>
 
-                <div className="table-muted" style={{ marginTop: 6 }}>
-                  {markPaidOnSave ? "Se aplicará al tocar Guardar." : markPaidHint}
+                <label className="form-label">
+                  Fecha inicio
+                  <input
+                    type="date"
+                    className="form-input"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                </label>
+
+                <label className="form-label">
+                  Fecha fin (calculada)
+                  <input className="form-input" value={endDatePreview} disabled />
+                </label>
+
+                <div className="table-card" style={{ padding: 12 }}>
+                  <div className="table-head" style={{ marginBottom: 10 }}>
+                    <div className="table-title">Vehículo (opcional)</div>
+                    <div className="table-muted">Podés cargarlo ahora o más adelante.</div>
+                  </div>
+
+                  {vehicleError ? <div className="field-err">{vehicleError}</div> : null}
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                      gap: 10,
+                    }}
+                  >
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Patente
+                      <input
+                        className="form-input"
+                        value={vehicle.plate}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, plate: e.target.value }))
+                        }
+                        placeholder="AB123CD"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Marca
+                      <input
+                        className="form-input"
+                        value={vehicle.make}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, make: e.target.value }))
+                        }
+                        placeholder="Toyota"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Modelo
+                      <input
+                        className="form-input"
+                        value={vehicle.model}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, model: e.target.value }))
+                        }
+                        placeholder="Corolla"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Año
+                      <input
+                        className="form-input"
+                        value={vehicle.year}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, year: e.target.value }))
+                        }
+                        placeholder="2020"
+                        inputMode="numeric"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Versión
+                      <input
+                        className="form-input"
+                        value={vehicle.version}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, version: e.target.value }))
+                        }
+                        placeholder="1.6 XEi"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Ciudad
+                      <input
+                        className="form-input"
+                        value={vehicle.city}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, city: e.target.value }))
+                        }
+                        placeholder="CABA"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Uso
+                      <input
+                        className="form-input"
+                        value={vehicle.usage}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, usage: e.target.value }))
+                        }
+                        placeholder="Particular"
+                      />
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Monto GNC
+                      <input
+                        className="form-input"
+                        value={vehicle.gnc_amount}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, gnc_amount: e.target.value }))
+                        }
+                        placeholder="4000"
+                        inputMode="numeric"
+                      />
+                    </label>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 12,
+                      marginTop: 10,
+                    }}
+                  >
+                    <label className="form-label" style={{ margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={vehicle.has_garage}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, has_garage: e.target.checked }))
+                        }
+                      />{" "}
+                      Tiene garage
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={vehicle.is_zero_km}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, is_zero_km: e.target.checked }))
+                        }
+                      />{" "}
+                      0 km
+                    </label>
+
+                    <label className="form-label" style={{ margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={vehicle.has_gnc}
+                        onChange={(e) =>
+                          setVehicle((prev) => ({ ...prev, has_gnc: e.target.checked }))
+                        }
+                      />{" "}
+                      Tiene GNC
+                    </label>
+                  </div>
                 </div>
+              </>
+            )}
+
+            <label className="form-label">
+              Cliente
+              {usersErr ? <div className="field-err">{usersErr}</div> : null}
+
+              <select
+                className={`form-input ${getFieldErr("user_id") ? "is-invalid" : ""}`}
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                disabled={loadingUsers}
+              >
+                <option value="">
+                  {loadingUsers ? "Cargando clientes…" : "Sin cliente"}
+                </option>
+
+                {selectedMissing ? (
+                  <option value={userId}>Cliente actual (id #{userId})</option>
+                ) : null}
+
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {clientLabel(u)}
+                  </option>
+                ))}
+              </select>
+
+              {getFieldErr("user_id") && <div className="field-err">{getFieldErr("user_id")}</div>}
+            </label>
+
+            <div className="modal-actions">
+              <button className="btn-secondary" type="button" onClick={onClose}>
+                Cancelar
+              </button>
+              <button className="btn-primary" type="submit" disabled={!canSubmit}>
+                {loadingSave || loadingMarkPaid ? "Guardando…" : isEdit ? "Guardar" : "Crear"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {reactivateConfirmOpen ? (
+        <div
+          className="modal-backdrop"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div
+            className="modal"
+            style={{ maxWidth: 360, width: "100%", padding: 0 }}
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header" style={{ padding: "12px 14px" }}>
+              <div>
+                <div className="modal-title" style={{ fontSize: 15 }}>
+                  Confirmar activación
+                </div>
+                <div className="modal-sub" style={{ fontSize: 12 }}>
+                  La póliza se activará con el nuevo período iniciado hoy.
+                </div>
+              </div>
+              <button
+                className="modal-x"
+                onClick={closeReactivateConfirm}
+                disabled={reactivateConfirmBusy}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="form modal-body" style={{ padding: "14px" }}>
+              <div
+                className="modal-actions"
+                style={{
+                  marginTop: 6,
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={closeReactivateConfirm}
+                  disabled={reactivateConfirmBusy}
+                  style={{ padding: "6px 10px" }}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  className="btn-primary"
+                  type="button"
+                  onClick={runReactivateConfirm}
+                  disabled={reactivateConfirmBusy}
+                  style={{ padding: "6px 12px" }}
+                >
+                  Aceptar
+                </button>
               </div>
             </div>
           </div>
-        ) : null}
+        </div>
+      ) : null}
 
-        <form className="form" onSubmit={onSubmit}>
-          <label className="form-label">
-            Número de póliza *
-            <input
-              className={`form-input ${getFieldErr("number") ? "is-invalid" : ""}`}
-              value={number}
-              onChange={(e) => setNumber(e.target.value)}
-              placeholder="SC-1234"
-              required
-            />
-            {getFieldErr("number") && <div className="field-err">{getFieldErr("number")}</div>}
-          </label>
+      {markPaidConfirmOpen ? (
+        <div
+          className="modal-backdrop"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div
+            className="modal"
+            style={{ maxWidth: 360, width: "100%", padding: 0 }}
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header" style={{ padding: "12px 14px" }}>
+              <div>
+                <div className="modal-title" style={{ fontSize: 15 }}>
+                  Confirmar pago
+                </div>
+                <div className="modal-sub" style={{ fontSize: 12 }}>
+                  {policy?.number ? `Póliza: ${policy.number}` : "Confirmación de pago manual"}
+                </div>
+              </div>
+              <button className="modal-x" onClick={closeMarkPaidConfirm} disabled={loadingMarkPaid}>
+                ✕
+              </button>
+            </div>
 
-          <label className="form-label">
-            Premium *
-            <input
-              className={`form-input ${getFieldErr("premium") ? "is-invalid" : ""}`}
-              value={premium}
-              onChange={(e) => setPremium(e.target.value)}
-              required
-            />
-            {getFieldErr("premium") && <div className="field-err">{getFieldErr("premium")}</div>}
-          </label>
+            <div className="form modal-body" style={{ padding: "14px" }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>
+                ¿Marcar esta póliza como abonada ahora?
+              </div>
 
-          {!isEdit && (
-            <>
-              <label className="form-label">
-                Tipo de seguro
-                <select
-                  className={`form-input ${getFieldErr("product_id") ? "is-invalid" : ""}`}
-                  value={productId}
-                  onChange={(e) => setProductId(e.target.value)}
-                  disabled={loadingProducts}
+              <div className="rcpt-muted" style={{ padding: 0, fontSize: 12 }}>
+                Se marcará el período vigente como abonado.
+              </div>
+
+              <div
+                className="modal-actions"
+                style={{
+                  marginTop: 6,
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={closeMarkPaidConfirm}
+                  disabled={loadingMarkPaid}
+                  style={{ padding: "6px 10px" }}
                 >
-                  <option value="">
-                    {loadingProducts ? "Cargando productos…" : "Seleccionar…"}
-                  </option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name || `Producto #${p.id}`}
-                    </option>
-                  ))}
-                </select>
-                {getFieldErr("product_id") && (
-                  <div className="field-err">{getFieldErr("product_id")}</div>
-                )}
-              </label>
+                  Cancelar
+                </button>
 
-              <label className="form-label">
-                Fecha inicio
-                <input
-                  type="date"
-                  className="form-input"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                />
-              </label>
-
-              <label className="form-label">
-                Fecha fin (calculada)
-                <input className="form-input" value={endDatePreview} disabled />
-              </label>
-            </>
-          )}
-
-          <label className="form-label">
-            Cliente
-            {usersErr ? <div className="field-err">{usersErr}</div> : null}
-
-            <select
-              className={`form-input ${getFieldErr("user_id") ? "is-invalid" : ""}`}
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              disabled={loadingUsers}
-            >
-              <option value="">
-                {loadingUsers ? "Cargando clientes…" : "Sin cliente"}
-              </option>
-
-              {selectedMissing ? (
-                <option value={userId}>Cliente actual (id #{userId})</option>
-              ) : null}
-
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {clientLabel(u)}
-                </option>
-              ))}
-            </select>
-
-            {getFieldErr("user_id") && <div className="field-err">{getFieldErr("user_id")}</div>}
-          </label>
-
-          <div className="modal-actions">
-            <button className="btn-secondary" type="button" onClick={onClose}>
-              Cancelar
-            </button>
-            <button className="btn-primary" type="submit" disabled={!canSubmit}>
-              {loadingSave || loadingMarkPaid ? "Guardando…" : isEdit ? "Guardar" : "Crear"}
-            </button>
+                <button
+                  className="btn-primary"
+                  type="button"
+                  onClick={runMarkPaidConfirm}
+                  disabled={loadingMarkPaid}
+                  style={{ padding: "6px 12px" }}
+                >
+                  {loadingMarkPaid ? "Procesando…" : "Confirmar"}
+                </button>
+              </div>
+            </div>
           </div>
-        </form>
-      </div>
+        </div>
+      ) : null}
+
     </div>
   );
 }

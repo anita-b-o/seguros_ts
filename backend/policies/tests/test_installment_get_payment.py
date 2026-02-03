@@ -23,7 +23,7 @@ class BillingPeriodCurrentSerializerTests(TestCase):
             number="GETPAY-1",
             product=self.product,
             premium=15000,
-            start_date=date.today() - timedelta(days=5),
+            start_date=date.today().replace(day=1),
             end_date=date.today() + timedelta(days=60),
             status="active",
         )

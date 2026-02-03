@@ -308,12 +308,6 @@ export default function ReceiptsPage() {
                               <strong>{fmtDate(bp.due_date_soft)}</strong>
                             </span>
                           </div>
-                          <div className="rcpt-pendingMetaRow">
-                            <span className="rcpt-pendingMetaK">Cierre real</span>
-                            <span className="rcpt-pendingMetaV">
-                              <strong>{fmtDate(bp.due_date_hard)}</strong>
-                            </span>
-                          </div>
                         </div>
                       </div>
                     </div>

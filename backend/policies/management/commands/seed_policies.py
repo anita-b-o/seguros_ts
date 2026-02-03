@@ -940,6 +940,7 @@ class Command(BaseCommand):
                 status=item["status"],
                 start_date=item["start"],
                 end_date=item["end"],
+                holder_dni=getattr(user, "dni", None),
             )
             policy, _ = Policy.objects.update_or_create(
                 number=item["number"],

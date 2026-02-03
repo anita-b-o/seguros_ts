@@ -88,7 +88,7 @@ class AppSettingsView(APIView):
         logger = logging.getLogger(__name__)
 
         for policy in queryset.iterator():
-            new_end = _add_months(policy.start_date, max(0, months - 1))
+            new_end = _add_months(policy.start_date, months)
             if not new_end:
                 continue
             if policy.end_date == new_end:

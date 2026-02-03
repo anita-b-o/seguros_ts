@@ -6,8 +6,10 @@ export const associatePolicyByNumber = createAsyncThunk(
   "policiesAssociate/associatePolicyByNumber",
   async ({ policy_number }, { rejectWithValue }) => {
     try {
-      // Backend espera: POST /policies/claim  { number: "..." }
-      const data = await policiesApi.claimPolicy({ numberOrCode: policy_number });
+      // Backend espera: POST /accounts/users/me/policies/associate
+      const data = await policiesApi.associateMyPolicy({
+        policyNumber: policy_number,
+      });
       return data;
     } catch (err) {
       const status = err?.response?.status;

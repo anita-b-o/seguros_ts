@@ -1,7 +1,7 @@
 // src/pages/admin/users/UsersTable.jsx
 import "@/styles/adminPolicies.css";
 
-export default function UsersTable({ users, loading, onManagePolicies }) {
+export default function UsersTable({ users, loading, onManagePolicies, onDelete, deleting }) {
   return (
     <div className="table-card" style={{ marginTop: 14 }}>
       <div className="table-head">
@@ -51,6 +51,14 @@ export default function UsersTable({ users, loading, onManagePolicies }) {
                     <div className="row-actions">
                       <button className="btn-link" type="button" onClick={() => onManagePolicies(u)}>
                         Gestionar pólizas
+                      </button>
+                      <button
+                        className="btn-link danger"
+                        type="button"
+                        onClick={() => onDelete?.(u)}
+                        disabled={deleting}
+                      >
+                        Eliminar
                       </button>
                     </div>
                   </td>

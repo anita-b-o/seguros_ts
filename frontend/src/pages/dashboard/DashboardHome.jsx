@@ -110,12 +110,80 @@ export default function DashboardHome() {
 
   const hasMany = policies.length > 1;
 
+  const mapStatus = (value, labels) => {
+    const raw = value == null ? "" : String(value).trim();
+    if (!raw) return "-";
+    const key = raw.toUpperCase();
+    return labels[key] || raw;
+  };
+
+  const toDayStamp = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate());
+    }
+    if (typeof value === "string") {
+      const parts = value.split("-");
+      if (parts.length >= 3) {
+        const y = Number(parts[0]);
+        const m = Number(parts[1]);
+        const d = Number(parts[2]);
+        if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+          return Date.UTC(y, m - 1, d);
+        }
+      }
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) {
+        return Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+      }
+    }
+    return null;
+  };
+
+  const isTodayInRange = (start, end) => {
+    const todayStamp = toDayStamp(new Date());
+    const startStamp = toDayStamp(start);
+    const endStamp = toDayStamp(end);
+    if (todayStamp == null || startStamp == null || endStamp == null) return null;
+    return todayStamp >= startStamp && todayStamp <= endStamp;
+  };
+
+  const POLICY_STATUS_LABELS = {
+    ACTIVE: "Vigente",
+    IN_FORCE: "Vigente",
+    ISSUED: "Emitida",
+    PENDING: "Pendiente",
+    DRAFT: "Borrador",
+    SUSPENDED: "Suspendida",
+    CANCELLED: "Cancelada",
+    CANCELED: "Cancelada",
+    EXPIRED: "Vencida",
+    LAPSED: "Vencida",
+    TERMINATED: "Finalizada",
+  };
+
+  const BILLING_STATUS_LABELS = {
+    PAID: "Pagado",
+    UNPAID: "Impago",
+    PENDING: "Pendiente",
+    OVERDUE: "Vencido",
+    DUE: "Pendiente",
+    PARTIALLY_PAID: "Parcial",
+    PROCESSING: "En proceso",
+    FAILED: "Fallido",
+    CANCELLED: "Anulado",
+    CANCELED: "Anulado",
+    VOID: "Anulado",
+  };
+
   // ===== Vista normalizada para el resumen de póliza =====
   const policyView = useMemo(() => {
     if (!selected) return null;
 
     const number = pickFirst(selected, ["number", "policy_number", "policyNumber"]) || "-";
-    const status = pickFirst(selected, ["status", "policy_status"]) || "-";
+    const statusRaw = pickFirst(selected, ["status", "policy_status"]) || "-";
+    const status = mapStatus(statusRaw, POLICY_STATUS_LABELS);
 
     const start = pickFirst(selected, ["start_date", "startDate", "term_start"]);
     const end = pickFirst(selected, ["end_date", "endDate", "term_end"]);
@@ -145,18 +213,22 @@ export default function DashboardHome() {
       pickFirst(selected, ["payment_end_date"]);
 
     // Billing current (si existe)
-    const periodStatus =
-      pickFirst(billingCurrent, ["status", "state"]) ||
-      null;
+    const periodStatusRaw = pickFirst(billingCurrent, ["status", "state"]) || null;
+    const periodStatus = mapStatus(periodStatusRaw, BILLING_STATUS_LABELS);
 
     const amount =
       pickFirst(billingCurrent, ["amount", "total", "total_amount"]) ?? null;
 
     // Heurística simple de “hay algo para pagar”:
     // - si existe billing_current y no está PAID, asumimos que puede haber pago pendiente.
-    const isPaid = String(periodStatus || "").toUpperCase() === "PAID";
+    const isPaid = String(periodStatusRaw || "").toUpperCase() === "PAID";
     const hasBillingPeriod = Boolean(billingCurrent);
-    const inPaymentWindow = hasBillingPeriod && !isPaid;
+    const inWindowByTimeline = isTodayInRange(
+      pickFirst(timeline, ["payment_start_date"]),
+      pickFirst(timeline, ["payment_end_date"])
+    );
+    const inPaymentWindow =
+      hasBillingPeriod && !isPaid && (inWindowByTimeline == null ? true : inWindowByTimeline);
 
     return {
       number,
@@ -280,11 +352,6 @@ export default function DashboardHome() {
                   </div>
 
                   <div className="dash-item">
-                    <div className="dash-k">Cierre real</div>
-                    <div className="dash-v">{fmtDate(policyView.paymentEnd)}</div>
-                  </div>
-
-                  <div className="dash-item">
                     <div className="dash-k">Estado</div>
                     <div className="dash-v">{policyView.billingStatus || "-"}</div>
                   </div>
@@ -309,7 +376,6 @@ export default function DashboardHome() {
                 </div>
 
                 <div className="dash-hint">
-                  Si pagás después del vencimiento del cliente, puede seguir siendo aceptado hasta el cierre real del período.
                 </div>
               </div>
             ) : (

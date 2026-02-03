@@ -1,5 +1,6 @@
 # backend/products/models.py
 from django.db import models
+from django.utils import timezone
 from django.db.models.functions import Lower
 
 
@@ -38,6 +39,8 @@ class Product(models.Model):
 
     # Orden para el Home (menor primero)
     home_order = models.PositiveIntegerField(default=0)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(Lower("code"), name="uniq_product_code_lower")]
@@ -71,6 +74,20 @@ class Product(models.Model):
         else:
             self.code = self.normalize_code(self.code)
         super().save(*args, **kwargs)
+
+    def soft_delete(self, when=None):
+        if self.is_deleted:
+            return
+        self.is_deleted = True
+        self.deleted_at = when or timezone.now()
+        self.save(update_fields=["is_deleted", "deleted_at"])
+
+    def restore(self):
+        if not self.is_deleted:
+            return
+        self.is_deleted = False
+        self.deleted_at = None
+        self.save(update_fields=["is_deleted", "deleted_at"])
 
     def __str__(self):
         return f"{self.name} ({self.get_plan_type_display()})"

@@ -68,6 +68,7 @@ class Policy(models.Model):
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     claim_code = models.CharField(max_length=20, null=True, blank=True, unique=True)
+    holder_dni = models.CharField(max_length=20, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -177,7 +178,10 @@ class Policy(models.Model):
 
         if settings_obj:
             window_days = int(getattr(settings_obj, "payment_window_days", 0) or 0)
-            early_due_days = int(getattr(settings_obj, "payment_early_due_days", 0) or 0)
+            early_due_days = getattr(settings_obj, "client_expiration_offset_days", None)
+            if early_due_days is None:
+                early_due_days = getattr(settings_obj, "payment_early_due_days", 0) or 0
+            early_due_days = int(early_due_days or 0)
 
         # Fallback de emergencia para no romper UI si falta settings/campo
         if window_days <= 0:

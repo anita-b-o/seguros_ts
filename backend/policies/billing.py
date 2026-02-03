@@ -42,7 +42,7 @@ def ensure_policy_end_date(policy: Policy) -> bool:
     months = getattr(settings_obj, "default_term_months", 0) or 0
     if months <= 0:
         return False
-    computed = _add_months(policy.start_date, max(0, months - 1))
+    computed = _add_months(policy.start_date, months)
     if not computed:
         return False
     policy.end_date = computed
@@ -155,7 +155,7 @@ def months_duration_for_policy(policy: Policy) -> int:
     """
     settings_obj = AppSettings.get_solo()
     if policy.start_date and policy.end_date:
-        return max(1, _months_between(policy.start_date, policy.end_date) + 1)
+        return max(1, _months_between(policy.start_date, policy.end_date))
     return getattr(settings_obj, "default_term_months", 3) or 3
 
 

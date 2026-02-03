@@ -20,7 +20,7 @@ from accounts.auth_views import (
     GoogleLoginStatusView,
     ResendOnboardingView,
 )
-from accounts.views import deprecated_lookup
+from accounts.views import deprecated_lookup, AdminUserViewSet
 from accounts.urls import PublicTokenRefreshView
 from .legacy_views import legacy_announcements_list, legacy_announcements_detail
 from common.views import AppSettingsView
@@ -158,6 +158,18 @@ urlpatterns = [
     # CANÓNICO: include CON "/" final
     # LEGACY: redirect SIN slash -> CON slash
     # =========================
+    # Legacy alias: /api/admin/users (compat)
+    path("api/admin/users", AdminUserViewSet.as_view({"get": "list", "post": "create"})),
+    path("api/admin/users/", AdminUserViewSet.as_view({"get": "list", "post": "create"})),
+    path(
+        "api/admin/users/<int:pk>",
+        AdminUserViewSet.as_view({"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}),
+    ),
+    path(
+        "api/admin/users/<int:pk>/",
+        AdminUserViewSet.as_view({"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}),
+    ),
+
     path("api/admin/policies/", include("policies.admin_urls")),
     path("api/admin/policies", _redirect_to("/api/admin/policies/")),
 

@@ -4,6 +4,7 @@ import useAuth from "@/hooks/useAuth";
 import { adminSettingsApi } from "@/services/adminSettingsApi";
 import { accountApi } from "@/services/accountApi";
 import { adminPoliciesApi } from "@/services/adminPoliciesApi";
+import { useNavigate } from "react-router-dom";
 import "@/styles/adminHome.css";
 
 function isAdminUser(u) {
@@ -81,7 +82,9 @@ function buildContactPatchPayload(settings, contact) {
 }
 
 export default function AdminHome() {
+  const navigate = useNavigate();
   const { user } = useAuth();
+  const { logout } = useAuth();
   const isAdmin = isAdminUser(user);
 
   const [tab, setTab] = useState("perfil"); // perfil | preferencias | contacto
@@ -110,6 +113,8 @@ export default function AdminHome() {
   // ---- NOTIFICACIÓN: pólizas en período de ajuste ----
   const [adjustCount, setAdjustCount] = useState(null); // null = sin cargar
   const [loadingAdjustCount, setLoadingAdjustCount] = useState(false);
+  const [unpaidCount, setUnpaidCount] = useState(null);
+  const [loadingUnpaidCount, setLoadingUnpaidCount] = useState(false);
 
   const form = useMemo(() => {
     const s = settings || {};
@@ -163,6 +168,24 @@ export default function AdminHome() {
     })();
   }, [isAdmin]);
 
+  // Cargar contador de pólizas no abonadas al entrar al admin
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    (async () => {
+      setLoadingUnpaidCount(true);
+      try {
+        const data = await adminPoliciesApi.stats();
+        const n = Number(data?.soft_overdue_unpaid?.count);
+        setUnpaidCount(Number.isFinite(n) ? n : 0);
+      } catch (e) {
+        setUnpaidCount(null);
+      } finally {
+        setLoadingUnpaidCount(false);
+      }
+    })();
+  }, [isAdmin]);
+
   // Cargar settings cuando entro a Preferencias o Contacto
   useEffect(() => {
     if (!isAdmin) return;
@@ -187,15 +210,6 @@ export default function AdminHome() {
       }
     })();
   }, [tab, isAdmin]);
-
-  if (!isAdmin) {
-    return (
-      <div style={{ padding: 24 }}>
-        <h2>Admin</h2>
-        <p>No tenés permisos para ver esta sección.</p>
-      </div>
-    );
-  }
 
   // --- VALIDACIÓN UI (Preferencias) ---
   const uiSettingsError = useMemo(() => {
@@ -347,24 +361,102 @@ export default function AdminHome() {
     return `Hay ${adjustCount} pólizas en período de ajuste.`;
   }, [loadingAdjustCount, adjustCount]);
 
+  const unpaidBannerText = useMemo(() => {
+    if (loadingUnpaidCount) return "Revisando pólizas no abonadas…";
+    if (unpaidCount == null) return "";
+    if (unpaidCount <= 0) return "";
+    if (unpaidCount === 1) return "Hay 1 póliza no abonada.";
+    return `Hay ${unpaidCount} pólizas no abonadas.`;
+  }, [loadingUnpaidCount, unpaidCount]);
+
   return (
     <div className="admin-page" style={{ padding: 24 }}>
-      <div style={{ marginBottom: 14 }}>
-        <h1 className="admin-title" style={{ marginBottom: 6 }}>
-          Panel Admin
-        </h1>
-        <p className="admin-sub" style={{ margin: 0 }}>
-          Perfil y preferencias del sistema.
-        </p>
+      {!isAdmin ? (
+        <div style={{ padding: 24 }}>
+          <h2>Admin</h2>
+          <p>No tenés permisos para ver esta sección.</p>
+        </div>
+      ) : null}
 
-        {adjustBannerText ? (
-          <div className="admin-notice" style={{ marginTop: 12 }}>
-            {adjustBannerText}
+      {isAdmin ? (
+      <div style={{ marginBottom: 14 }}>
+        {(adjustBannerText || unpaidBannerText) ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 12,
+            }}
+          >
+            {adjustBannerText ? (
+              <div
+                className="admin-notice"
+                style={{
+                  padding: "10px 14px",
+                  maxWidth: 620,
+                  width: "100%",
+                  textAlign: "center",
+                  background: "linear-gradient(90deg, #0b2f6a, #0f4aa5)",
+                  border: "1px solid rgba(15, 74, 165, 0.35)",
+                  color: "#fff",
+                  fontWeight: 600,
+                  letterSpacing: 0.2,
+                  borderRadius: 12,
+                  boxShadow: "0 8px 18px rgba(11, 47, 106, 0.2)",
+                }}
+              >
+                {adjustBannerText}
+              </div>
+            ) : null}
+
+            {unpaidBannerText ? (
+              <div
+                className="admin-notice"
+                style={{
+                  padding: "10px 14px",
+                  maxWidth: 620,
+                  width: "100%",
+                  textAlign: "center",
+                  background: "linear-gradient(90deg, #0b2f6a, #0f4aa5)",
+                  border: "1px solid rgba(15, 74, 165, 0.35)",
+                  color: "#fff",
+                  fontWeight: 600,
+                  letterSpacing: 0.2,
+                  borderRadius: 12,
+                  boxShadow: "0 8px 18px rgba(11, 47, 106, 0.2)",
+                }}
+              >
+                {unpaidBannerText}
+              </div>
+            ) : null}
           </div>
         ) : null}
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h1 className="admin-title" style={{ marginBottom: 6 }}>
+            Panel Admin
+          </h1>
+          <button
+            className="btn-secondary"
+            type="button"
+            onClick={async () => {
+              try {
+                await logout();
+              } finally {
+                navigate("/login", { replace: true });
+              }
+            }}
+          >
+            Cerrar sesión
+          </button>
+        </div>
       </div>
+      ) : null}
 
       {/* Tabs */}
+      {isAdmin ? (
       <div className="admin-tabs" style={{ display: "flex", gap: 10, marginBottom: 16 }}>
         <button
           type="button"
@@ -388,9 +480,10 @@ export default function AdminHome() {
           Contacto
         </button>
       </div>
+      ) : null}
 
       {/* PERFIL */}
-      {tab === "perfil" ? (
+      {isAdmin && tab === "perfil" ? (
         <div className="table-card" style={{ padding: 14 }}>
           <div className="table-head" style={{ marginBottom: 12 }}>
             <div className="table-title">Tu cuenta</div>
@@ -459,13 +552,18 @@ export default function AdminHome() {
       ) : null}
 
       {/* PREFERENCIAS */}
-      {tab === "preferencias" ? (
+      {isAdmin && tab === "preferencias" ? (
         <div className="table-card" style={{ padding: 14 }}>
           <div className="table-head" style={{ marginBottom: 12 }}>
             <div className="table-title">Preferencias de pólizas</div>
             <div className="table-muted">
               {loadingSettings ? "Cargando…" : "Configuración global"}
             </div>
+          </div>
+
+          <div className="table-muted" style={{ marginBottom: 10 }}>
+            Estos cambios se aplican a nuevas pólizas y a los próximos cálculos. No
+            reescriben períodos ya cerrados.
           </div>
 
           {settingsErr ? <div className="admin-alert">{settingsErr}</div> : null}
@@ -476,7 +574,7 @@ export default function AdminHome() {
           ) : null}
 
           <label className="form-label">
-            payment_window_days (días de período de pago)
+            Días del período de pago
             <input
               className="form-input"
               value={paymentWindowDays}
@@ -486,12 +584,12 @@ export default function AdminHome() {
               placeholder="Ej: 10"
             />
             <div className="info-hint">
-              Cantidad de días que dura el período de pago (define el cycle_end real).
+              Define cuántos días tiene el período de pago del ciclo actual.
             </div>
           </label>
 
           <label className="form-label">
-            client_expiration_offset_days (vencimiento visible)
+            Días de vencimiento visible (para el cliente)
             <input
               className={`form-input ${uiSettingsError ? "is-invalid" : ""}`}
               value={clientOffsetDays}
@@ -501,13 +599,13 @@ export default function AdminHome() {
               placeholder="Ej: 3"
             />
             <div className="info-hint">
-              Días antes del vencimiento real en los que vence “para el cliente”. Debe ser menor que payment_window_days.
+              Cuántos días antes del vencimiento real se muestra el vencimiento al cliente. Debe ser menor al período de pago.
             </div>
             {uiSettingsError ? <div className="field-err">{uiSettingsError}</div> : null}
           </label>
 
           <label className="form-label">
-            default_term_months (meses de vigencia por defecto)
+            Meses de vigencia por defecto
             <input
               className="form-input"
               value={defaultTermMonths}
@@ -516,11 +614,11 @@ export default function AdminHome() {
               inputMode="numeric"
               placeholder="Ej: 3"
             />
-            <div className="info-hint">Duración por defecto de una vigencia nueva o renovada.</div>
+            <div className="info-hint">Duración por defecto para nuevas pólizas o renovaciones.</div>
           </label>
 
           <label className="form-label">
-            policy_adjustment_window_days (período de ajuste)
+            Días de período de ajuste
             <input
               className="form-input"
               value={policyAdjustmentWindowDays}
@@ -530,7 +628,7 @@ export default function AdminHome() {
               placeholder="Ej: 5"
             />
             <div className="info-hint">
-              Días antes de finalizar la vigencia en los que la póliza entra en “período de ajuste”.
+              Días antes de finalizar la vigencia en los que la póliza entra en período de ajuste.
             </div>
           </label>
 
@@ -548,7 +646,7 @@ export default function AdminHome() {
       ) : null}
 
       {/* CONTACTO */}
-      {tab === "contacto" ? (
+      {isAdmin && tab === "contacto" ? (
         <div className="table-card" style={{ padding: 14 }}>
           <div className="table-head" style={{ marginBottom: 12 }}>
             <div className="table-title">Datos de contacto (Home)</div>

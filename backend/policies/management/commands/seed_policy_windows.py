@@ -157,6 +157,7 @@ class Command(BaseCommand):
                     "status": spec["status"],
                     "start_date": spec["start_date"],
                     "end_date": spec["end_date"],
+                    "holder_dni": getattr(spec["user"], "dni", None),
                 },
             )
             ensure_policy_vehicle(policy, spec["vehicle"])

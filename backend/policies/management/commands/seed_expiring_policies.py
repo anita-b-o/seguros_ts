@@ -66,6 +66,7 @@ class Command(BaseCommand):
                     "status": "active",
                     "start_date": start,
                     "end_date": end,
+                    "holder_dni": getattr(user, "dni", None),
                 },
             )
             ensure_policy_vehicle(

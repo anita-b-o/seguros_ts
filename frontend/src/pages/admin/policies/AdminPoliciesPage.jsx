@@ -7,6 +7,7 @@ import {
   deleteAdminPolicy,
   fetchAdminPolicies,
   setAdminPoliciesPage,
+  setAdminPoliciesQuery,
 } from "@/features/adminPolicies/adminPoliciesSlice";
 
 import { adminPoliciesApi } from "@/services/adminPoliciesApi";
@@ -48,6 +49,24 @@ function groupCounts(list) {
 
   return { total, pending, byStatus };
 }
+
+const statusLabel = (raw) => {
+  const key = String(raw || "").toLowerCase();
+  const map = {
+    active: "Activa",
+    expired: "Vencida",
+    cancelled: "Cancelada",
+    suspended: "Suspendida",
+    unknown: "Desconocido",
+  };
+  return map[key] || (raw ? String(raw) : "Desconocido");
+};
+
+const userLabel = (u) => {
+  if (!u) return "";
+  const name = [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
+  return name || u.full_name || u.email || u.username || (u.id ? `ID: ${u.id}` : "");
+};
 
 /* -----------------------
  * Modal lista (selector)
@@ -128,7 +147,7 @@ export default function AdminPoliciesPage() {
   const { user } = useAuth();
 
   // ✅ Traemos next/previous del slice para controlar paginado real
-  const { list, count, page, loadingList, loadingDelete, errorList, next, previous } =
+  const { list, count, page, q, loadingList, loadingDelete, errorList, next, previous } =
     useSelector((s) => s.adminPolicies);
 
   const [openCreate, setOpenCreate] = useState(false);
@@ -142,8 +161,11 @@ export default function AdminPoliciesPage() {
   const [deletedPage, setDeletedPage] = useState(1);
   const [deletedCount, setDeletedCount] = useState(0);
   const [deletedList, setDeletedList] = useState([]);
+  const [deletedQuery, setDeletedQuery] = useState("");
   const [loadingDeleted, setLoadingDeleted] = useState(false);
   const [errorDeleted, setErrorDeleted] = useState("");
+  const [confirm, setConfirm] = useState({ open: false, mode: "", policy: null });
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   // --- Stats (tarjetas) ---
   const [stats, setStats] = useState(null);
@@ -164,8 +186,8 @@ export default function AdminPoliciesPage() {
 
   // ✅ LIST: cuando cambie page, trae la página
   useEffect(() => {
-    dispatch(fetchAdminPolicies({ page }));
-  }, [dispatch, page]);
+    dispatch(fetchAdminPolicies({ page, search: q }));
+  }, [dispatch, page, q]);
 
   useEffect(() => {
     dispatch(clearAdminPoliciesErrors());
@@ -196,11 +218,11 @@ export default function AdminPoliciesPage() {
   // (no se usa en el render, pero lo dejo por si lo querés mostrar)
   const metrics = useMemo(() => groupCounts(list), [list]); // eslint-disable-line no-unused-vars
 
-  const fetchDeleted = async ({ page: p = deletedPage } = {}) => {
+  const fetchDeleted = async ({ page: p = deletedPage, search = deletedQuery } = {}) => {
     setLoadingDeleted(true);
     setErrorDeleted("");
     try {
-      const data = await adminPoliciesApi.listDeleted({ page: p, page_size: 5 });
+      const data = await adminPoliciesApi.listDeleted({ page: p, page_size: 5, search });
       setDeletedList(Array.isArray(data?.results) ? data.results : []);
       setDeletedCount(Number(data?.count || 0));
       setDeletedPage(p);
@@ -219,24 +241,13 @@ export default function AdminPoliciesPage() {
 
     if (nextShow) {
       setDeletedPage(1);
-      await fetchDeleted({ page: 1 });
+      await fetchDeleted({ page: 1, search: deletedQuery });
     }
   };
 
-  const onRestore = async (policy) => {
-    const ok = window.confirm(`¿Recuperar la póliza ${policy.number}?`);
-    if (!ok) return;
-
-    setErrorDeleted("");
-    try {
-      await adminPoliciesApi.restore(policy.id);
-
-      dispatch(fetchAdminPolicies({ page }));
-      await fetchDeleted({ page: deletedPage });
-      void fetchStats();
-    } catch (e) {
-      setErrorDeleted("No se pudo recuperar la póliza.");
-    }
+  const onRestore = (policy) => {
+    if (!policy?.id) return;
+    setConfirm({ open: true, mode: "restore", policy });
   };
 
   const onRefresh = () => {
@@ -248,7 +259,7 @@ export default function AdminPoliciesPage() {
 
     if (showDeleted) {
       setDeletedPage(1);
-      void fetchDeleted({ page: 1 });
+      void fetchDeleted({ page: 1, search: deletedQuery });
     }
 
     void fetchStats();
@@ -280,17 +291,43 @@ export default function AdminPoliciesPage() {
     setEditErr("");
   };
 
-  const onDelete = async (policy) => {
-    const ok = window.confirm(
-      `¿Eliminar la póliza ${policy.number}? Esta acción no se puede deshacer.`
-    );
-    if (!ok) return;
+  const onDelete = (policy) => {
+    if (!policy?.id) return;
+    setConfirm({ open: true, mode: "delete", policy });
+  };
 
-    await dispatch(deleteAdminPolicy(policy.id));
+  const closeConfirm = (force = false) => {
+    if (confirmBusy && !force) return;
+    setConfirm({ open: false, mode: "", policy: null });
+  };
 
-    dispatch(fetchAdminPolicies({ page }));
-    if (showDeleted) void fetchDeleted({ page: deletedPage });
-    void fetchStats();
+  const runConfirmedAction = async () => {
+    if (confirmBusy || !confirm.open || !confirm.policy?.id) return;
+    setConfirmBusy(true);
+    setErrorDeleted("");
+
+    try {
+      if (confirm.mode === "delete") {
+        await dispatch(deleteAdminPolicy(confirm.policy.id));
+      } else {
+        await adminPoliciesApi.restore(confirm.policy.id);
+      }
+
+      dispatch(fetchAdminPolicies({ page }));
+      await fetchDeleted({ page: showDeleted ? deletedPage : 1, search: deletedQuery });
+      void fetchStats();
+    } catch (e) {
+      if (confirm.mode === "delete") {
+        // error de borrado se maneja en slice, pero mostramos fallback
+        // eslint-disable-next-line no-console
+        console.error(e);
+      } else {
+        setErrorDeleted("No se pudo recuperar la póliza.");
+      }
+    } finally {
+      setConfirmBusy(false);
+      closeConfirm(true);
+    }
   };
 
   const deletedTotalPages = useMemo(() => {
@@ -385,13 +422,14 @@ export default function AdminPoliciesPage() {
     }
   };
 
-  const onClickStatusCard = async (statusValue, statusCount) => {
+  const onClickStatusCard = async (statusValue, statusCount, labelText) => {
     const key = String(statusValue || "unknown");
+    const label = labelText || statusLabel(key);
     const cached = statusItemsCache?.[key];
 
     if (cached?.items?.length) {
       openList({
-        title: `Pólizas en estado: ${key}`,
+        title: `Pólizas en estado: ${label}`,
         subtitle: `${statusCount ?? cached.items.length} pólizas`,
         items: cached.items,
       });
@@ -399,7 +437,7 @@ export default function AdminPoliciesPage() {
     }
 
     openList({
-      title: `Pólizas en estado: ${key}`,
+      title: `Pólizas en estado: ${label}`,
       subtitle: `${Number(statusCount || 0)} pólizas`,
       items: [],
       loading: true,
@@ -422,19 +460,27 @@ export default function AdminPoliciesPage() {
 
     if (Array.isArray(raw)) {
       return raw
-        .map((it) => ({
-          status: it?.status ?? "unknown",
-          count: Number(it?.count || 0),
-        }))
+        .map((it) => {
+          const status = it?.status ?? "unknown";
+          return {
+            status,
+            label: statusLabel(status),
+            count: Number(it?.count || 0),
+          };
+        })
         .filter((it) => it.count > 0);
     }
 
     if (raw && typeof raw === "object") {
       return Object.entries(raw)
-        .map(([status, c]) => ({
-          status: status || "unknown",
-          count: Number(c || 0),
-        }))
+        .map(([status, c]) => {
+          const value = status || "unknown";
+          return {
+            status: value,
+            label: statusLabel(value),
+            count: Number(c || 0),
+          };
+        })
         .filter((it) => it.count > 0);
     }
 
@@ -445,7 +491,11 @@ export default function AdminPoliciesPage() {
     }
 
     return Object.entries(acc)
-      .map(([status, c]) => ({ status, count: c }))
+      .map(([status, c]) => ({
+        status,
+        label: statusLabel(status),
+        count: c,
+      }))
       .filter((it) => it.count > 0);
   }, [stats, list]);
 
@@ -472,9 +522,6 @@ export default function AdminPoliciesPage() {
       <div className="admin-header">
         <div>
           <h1 className="admin-title">Pólizas</h1>
-          <p className="admin-sub">
-            Listado, creación, edición (número, premium, cliente y vigencia) y eliminación de pólizas.
-          </p>
         </div>
 
         <div className="admin-actions">
@@ -500,6 +547,7 @@ export default function AdminPoliciesPage() {
       </div>
 
       {errorList ? <div className="admin-alert">{String(errorList)}</div> : null}
+
       {editErr ? <div className="admin-alert">{String(editErr)}</div> : null}
       {statsErr ? <div className="admin-alert">{String(statsErr)}</div> : null}
 
@@ -526,7 +574,7 @@ export default function AdminPoliciesPage() {
           title="Ver pólizas no abonadas con vencimiento visible vencido"
           style={{ cursor: loadingStats || !stats ? "not-allowed" : "pointer" }}
         >
-          <div className="metric-label">No abonadas (soft)</div>
+          <div className="metric-label">No abonadas</div>
           <div className="metric-value">
             {loadingStats ? "…" : Number(stats?.soft_overdue_unpaid?.count || 0)}
           </div>
@@ -537,17 +585,34 @@ export default function AdminPoliciesPage() {
             key={it.status}
             type="button"
             className="metric-card"
-            onClick={() => onClickStatusCard(it.status, it.count)}
+            onClick={() => onClickStatusCard(it.status, it.count, it.label)}
             disabled={loadingStats || (!stats && !list?.length)}
-            title={`Ver pólizas en estado ${it.status}`}
+            title={`Ver pólizas en estado ${it.label}`}
             style={{
               cursor: loadingStats || (!stats && !list?.length) ? "not-allowed" : "pointer",
             }}
           >
-            <div className="metric-label">{String(it.status)}</div>
+            <div className="metric-label">{it.label}</div>
             <div className="metric-value">{loadingStats ? "…" : it.count}</div>
           </button>
         ))}
+      </div>
+
+      <div className="table-card" style={{ marginTop: 18, marginBottom: 14 }}>
+        <div className="table-head">
+          <div className="table-title">Búsqueda</div>
+          <div className="table-muted">Total: {count}</div>
+        </div>
+
+        <div style={{ padding: 14, display: "flex", gap: 10 }}>
+          <input
+            className="form-input"
+            value={q}
+            onChange={(e) => dispatch(setAdminPoliciesQuery(e.target.value))}
+            placeholder="Buscar por número o patente…"
+            disabled={!isAdmin}
+          />
+        </div>
       </div>
 
       <PoliciesTable
@@ -596,6 +661,21 @@ export default function AdminPoliciesPage() {
               <div className="table-muted">{loadingDeleted ? "Cargando…" : `${deletedList.length} ítems`}</div>
             </div>
 
+            <div style={{ padding: 14, display: "flex", gap: 10 }}>
+              <input
+                className="form-input"
+                value={deletedQuery}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDeletedQuery(next);
+                  setDeletedPage(1);
+                  void fetchDeleted({ page: 1, search: next });
+                }}
+                placeholder="Buscar eliminadas por número o patente…"
+                disabled={!isAdmin}
+              />
+            </div>
+
             {errorDeleted ? (
               <div className="admin-alert" style={{ margin: 14 }}>
                 {String(errorDeleted)}
@@ -608,8 +688,8 @@ export default function AdminPoliciesPage() {
                   <tr>
                     <th>Número</th>
                     <th>Producto</th>
-                    <th>Premium</th>
-                    <th>Status</th>
+                    <th>Monto</th>
+                    <th>Estado</th>
                     <th>Vigencia</th>
                     <th style={{ textAlign: "right" }}>Acciones</th>
                   </tr>
@@ -635,7 +715,9 @@ export default function AdminPoliciesPage() {
                         <td>{p.product_name || "-"}</td>
                         <td className="mono">{p.premium}</td>
                         <td>
-                          <span className={`badge ${p.status || "unknown"}`}>{p.status || "unknown"}</span>
+                          <span className={`badge ${p.status || "unknown"}`}>
+                            {statusLabel(p.status)}
+                          </span>
                         </td>
                         <td className="mono">{fmtRange(p.start_date, p.end_date)}</td>
                         <td style={{ textAlign: "right" }}>
@@ -657,7 +739,7 @@ export default function AdminPoliciesPage() {
                 className="btn-secondary"
                 type="button"
                 disabled={loadingDeleted || deletedPage <= 1}
-                onClick={() => fetchDeleted({ page: deletedPage - 1 })}
+                onClick={() => fetchDeleted({ page: deletedPage - 1, search: deletedQuery })}
               >
                 Anterior
               </button>
@@ -670,7 +752,7 @@ export default function AdminPoliciesPage() {
                 className="btn-secondary"
                 type="button"
                 disabled={loadingDeleted || deletedPage >= deletedTotalPages}
-                onClick={() => fetchDeleted({ page: deletedPage + 1 })}
+                onClick={() => fetchDeleted({ page: deletedPage + 1, search: deletedQuery })}
               >
                 Siguiente
               </button>
@@ -699,6 +781,104 @@ export default function AdminPoliciesPage() {
         onPick={onPickFromList}
         onClose={closeList}
       />
+
+      {confirm.open ? (
+        <div
+          className="modal-backdrop"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div
+            className="modal"
+            style={{ maxWidth: 360, width: "100%", padding: 0 }}
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header" style={{ padding: "12px 14px" }}>
+              <div>
+                <div className="modal-title" style={{ fontSize: 15 }}>
+                  {confirm.mode === "delete" ? "Confirmar eliminación" : "Confirmar recuperación"}
+                </div>
+                <div className="modal-sub" style={{ fontSize: 12 }}>
+                  Pólizas
+                </div>
+              </div>
+              <button className="modal-x" onClick={closeConfirm} disabled={confirmBusy}>
+                ✕
+              </button>
+            </div>
+
+            <div className="form modal-body" style={{ padding: "14px" }}>
+              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>
+                {confirm.mode === "delete"
+                  ? "¿Eliminar esta póliza?"
+                  : "¿Recuperar esta póliza?"}
+              </div>
+
+              <div className="rcpt-muted" style={{ padding: 0, fontSize: 12 }}>
+                {confirm.policy?.number
+                  ? `Póliza: ${confirm.policy.number}`
+                  : confirm.policy?.id
+                  ? `ID: ${confirm.policy.id}`
+                  : ""}
+              </div>
+
+              {confirm.mode === "delete" ? (
+                <div className="rcpt-muted" style={{ padding: "8px 0 0", fontSize: 12 }}>
+                  {(() => {
+                    const assigned = userLabel(
+                      confirm.policy?.user || confirm.policy?.user_obj || null
+                    );
+                    if (assigned) {
+                      return `Cliente asignado: ${assigned}. Si confirmás, se desvinculará la relación entre la póliza y el cliente.`;
+                    }
+                    return "Si confirmás, la póliza quedará eliminada y no estará disponible para asignarla a un usuario.";
+                  })()}
+                </div>
+              ) : (
+                <div className="rcpt-muted" style={{ padding: "8px 0 0", fontSize: 12 }}>
+                  La póliza volverá a estar disponible para asignarla a un usuario.
+                </div>
+              )}
+
+              <div
+                className="modal-actions"
+                style={{
+                  marginTop: 16,
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={closeConfirm}
+                  disabled={confirmBusy}
+                  style={{ padding: "6px 10px" }}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  className="btn-primary"
+                  type="button"
+                  onClick={runConfirmedAction}
+                  disabled={confirmBusy}
+                  style={{ padding: "6px 12px" }}
+                >
+                  {confirmBusy ? "Procesando…" : "Confirmar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

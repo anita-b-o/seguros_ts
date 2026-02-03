@@ -13,7 +13,7 @@ from common.models import AppSettings
 from payments.billing import ensure_current_billing_period
 from policies.models import Policy, PolicyVehicle
 from products.models import Product
-from vehicles.models import Vehicle  
+from vehicles.models import Vehicle
 
 User = get_user_model()
 
@@ -33,7 +33,16 @@ def _safe_setattr(obj, field: str, value):
 
 
 def _get_or_create_user_by_email(*, email, defaults=None, password=None):
+    """
+    NOTE:
+    En tu modelo, create_user requiere (dni, email, password, **extra_fields).
+    Por lo tanto, para crear debemos pasar dni en defaults.
+
+    Además: normalizamos la respuesta por si el user ya existía.
+    """
     defaults = defaults or {}
+
+    # get_or_create por email (es unique). Para crear, defaults DEBE tener dni.
     user, created = User.objects.get_or_create(email=email, defaults=defaults)
 
     if not created:
@@ -42,7 +51,7 @@ def _get_or_create_user_by_email(*, email, defaults=None, password=None):
             setattr(user, k, v)
 
     if password:
-        user.set_password(password)  # CLAVE: nunca asignar user.password = "..."
+        user.set_password(password)  # nunca asignar user.password = "..."
     user.is_active = True
     user.save()
 
@@ -108,25 +117,21 @@ class Command(BaseCommand):
         No uses defaults con campos que pueden no existir (Django tira FieldError).
         Seteamos solo si el campo existe.
         """
-        # Si AppSettings es singleton tipo solo, esto funciona igual porque habrá 0 o 1 fila.
         settings = AppSettings.objects.first()
         created = False
         if not settings:
             settings = AppSettings()
             created = True
 
-        # Campos que sí sabemos que usás en views (según tu código):
         if hasattr(settings, "policy_adjustment_window_days") and getattr(settings, "policy_adjustment_window_days", None) in (None, 0):
             settings.policy_adjustment_window_days = 5
 
         if hasattr(settings, "default_term_months") and getattr(settings, "default_term_months", None) in (None, 0):
             settings.default_term_months = 3
 
-        # Campos de ciclo de pago: seteamos solo si existen
         if hasattr(settings, "payment_window_days") and getattr(settings, "payment_window_days", None) in (None, 0):
             settings.payment_window_days = 10
 
-        # ⚠️ Tu AppSettings NO tiene payment_early_due_days (por tu error), así que lo guardamos solo si existe
         if hasattr(settings, "payment_early_due_days") and getattr(settings, "payment_early_due_days", None) in (None, 0):
             settings.payment_early_due_days = 3
 
@@ -145,6 +150,8 @@ class Command(BaseCommand):
             "dni": "90000000",  # único
             "is_staff": True,
             "is_superuser": True,
+            # ✅ NUEVO: teléfono demo visible en el modal
+            "phone": "221-555-0000",
         }
         admin, created = _get_or_create_user_by_email(
             email="admin@sancayetano.com",
@@ -154,8 +161,16 @@ class Command(BaseCommand):
 
         _safe_setattr(admin, "is_staff", True)
         _safe_setattr(admin, "is_superuser", True)
+
+        # Asegurar DNI si faltara
         if hasattr(admin, "dni") and not getattr(admin, "dni", None):
             admin.dni = defaults["dni"]
+
+        # ✅ asegurar teléfono si faltara/vacío (para que no muestre "-")
+        if hasattr(admin, "phone"):
+            if not (getattr(admin, "phone", "") or "").strip():
+                admin.phone = defaults["phone"]
+
         admin.save()
 
         if created:
@@ -169,9 +184,22 @@ class Command(BaseCommand):
     def ensure_clients(self):
         clients = []
 
+        # ✅ NUEVO: agregamos phone para que el modal lo muestre
         demo_users = [
-            {"email": "cliente1@test.com", "first_name": "Juan", "last_name": "Pérez", "dni": "40111111"},
-            {"email": "cliente2@test.com", "first_name": "María", "last_name": "Gómez", "dni": "40222222"},
+            {
+                "email": "cliente1@test.com",
+                "first_name": "Juan",
+                "last_name": "Pérez",
+                "dni": "40111111",
+                "phone": "221-555-1111",
+            },
+            {
+                "email": "cliente2@test.com",
+                "first_name": "María",
+                "last_name": "Gómez",
+                "dni": "40222222",
+                "phone": "221-555-2222",
+            },
         ]
 
         for u in demo_users:
@@ -179,6 +207,8 @@ class Command(BaseCommand):
                 "first_name": u["first_name"],
                 "last_name": u["last_name"],
                 "dni": u["dni"],
+                # ✅ NUEVO: teléfono demo (si el usuario existe, lo actualizamos)
+                "phone": u["phone"],
             }
             user, created = _get_or_create_user_by_email(
                 email=u["email"],
@@ -186,10 +216,16 @@ class Command(BaseCommand):
                 password="cliente123",
             )
 
+            # ✅ asegurar teléfono si quedó vacío por datos anteriores
+            if hasattr(user, "phone"):
+                if not (getattr(user, "phone", "") or "").strip():
+                    user.phone = u["phone"]
+                    user.save(update_fields=["phone"])
+
             if created:
                 self.stdout.write(f"✔ Cliente creado: {u['email']} / cliente123")
             else:
-                self.stdout.write(f"✔ Cliente ya existente: {u['email']}")
+                self.stdout.write(f"✔ Cliente ya existente: {u['email']} (actualizado)")
 
             clients.append(user)
 
@@ -308,6 +344,9 @@ class Command(BaseCommand):
     def ensure_policies(self, clients, products):
         today = timezone.localdate()
 
+        status_active = Policy.Status.ACTIVE if hasattr(Policy, "Status") else "active"
+        status_expired = Policy.Status.EXPIRED if hasattr(Policy, "Status") else "expired"
+
         demo_policies = [
             {
                 "number": "SC-0001",
@@ -316,7 +355,7 @@ class Command(BaseCommand):
                 "vehicle": {"brand": "Toyota", "model": "Corolla", "year": 2018, "plate": "AB123CD"},
                 "start_date": today - timedelta(days=30),
                 "end_date": today + timedelta(days=60),
-                "status": Policy.Status.ACTIVE if hasattr(Policy, "Status") else "active",
+                "status": status_active,
             },
             {
                 "number": "SC-0002",
@@ -324,8 +363,8 @@ class Command(BaseCommand):
                 "product": products[1],
                 "vehicle": {"brand": "Ford", "model": "Ranger", "year": 2021, "plate": "AC456EF"},
                 "start_date": today - timedelta(days=90),
-                "end_date": today + timedelta(days=5),  # entra en ventana de ajuste
-                "status": Policy.Status.ACTIVE if hasattr(Policy, "Status") else "active",
+                "end_date": today + timedelta(days=3),
+                "status": status_active,
             },
             {
                 "number": "SC-0003",
@@ -333,8 +372,17 @@ class Command(BaseCommand):
                 "product": products[0],
                 "vehicle": {"brand": "Volkswagen", "model": "Gol", "year": 2016, "plate": "AD789GH"},
                 "start_date": today - timedelta(days=120),
-                "end_date": today - timedelta(days=1),  # vencida
-                "status": Policy.Status.ACTIVE if hasattr(Policy, "Status") else "active",
+                "end_date": today - timedelta(days=5),
+                "status": status_expired,
+            },
+            {
+                "number": "SC-0004",
+                "user": clients[2] if len(clients) > 2 else clients[0],
+                "product": products[0],
+                "vehicle": {"brand": "Toyota", "model": "Corolla", "year": 2019, "plate": "AE123JK"},
+                "start_date": today - timedelta(days=20),
+                "end_date": today + timedelta(days=40),
+                "status": status_active,
             },
         ]
 
@@ -378,7 +426,7 @@ class Command(BaseCommand):
                 PolicyVehicle.objects.create(
                     policy=policy,
                     plate=plate_norm,
-                    make=p["vehicle"]["brand"],  # ✅ make, no brand
+                    make=p["vehicle"]["brand"],  # make, no brand
                     model=p["vehicle"]["model"],
                     version="Demo",
                     year=p["vehicle"]["year"],
@@ -407,7 +455,23 @@ class Command(BaseCommand):
                     snap.save()
 
             # --- BillingPeriod vigente ---
-            ensure_current_billing_period(policy, now=today)
+            period = ensure_current_billing_period(policy, now=today)
+
+            # Forzar una póliza "no abonada" (vencimiento visible pasado, real vigente)
+            if p["number"] == "SC-0004" and period:
+                period.due_date_soft = today - timedelta(days=2)
+                period.due_date_hard = today + timedelta(days=2)
+                period.period_end = period.due_date_hard
+                period.status = period.Status.UNPAID
+                period.save(
+                    update_fields=[
+                        "due_date_soft",
+                        "due_date_hard",
+                        "period_end",
+                        "status",
+                        "updated_at",
+                    ]
+                )
 
             if created:
                 self.stdout.write(f"✔ Póliza creada: {policy.number}")
