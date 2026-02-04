@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import useAuth from "@/hooks/useAuth";
 import { policiesApi } from "@/services/policiesApi";
+import { paymentsApi } from "@/services/paymentsApi";
 import "@/styles/dashboard.css";
 
 function fmtMoney(v) {
@@ -13,6 +14,16 @@ function fmtMoney(v) {
 
 function fmtDate(v) {
   if (!v) return "-";
+  if (typeof v === "string") {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      const local = new Date(y, mo - 1, d);
+      if (!Number.isNaN(local.getTime())) return local.toLocaleDateString("es-AR");
+    }
+  }
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return String(v);
   return d.toLocaleDateString("es-AR");
@@ -58,6 +69,8 @@ export default function DashboardHome() {
   const [selected, setSelected] = useState(null);
   const [billingCurrent, setBillingCurrent] = useState(null);
   const [timeline, setTimeline] = useState(null);
+  const [payBusy, setPayBusy] = useState(false);
+  const [payErr, setPayErr] = useState("");
 
   async function loadDashboard(policyId = "") {
     setLoading(true);
@@ -177,11 +190,19 @@ export default function DashboardHome() {
     VOID: "Anulado",
   };
 
+  const BILLING_UI_LABELS = {
+    PAID: "Pagado",
+    PENDING: "Pendiente",
+    NO_COVERAGE: "Sin cobertura",
+    OVERDUE: "Vencido",
+  };
+
   // ===== Vista normalizada para el resumen de póliza =====
   const policyView = useMemo(() => {
     if (!selected) return null;
 
-    const number = pickFirst(selected, ["number", "policy_number", "policyNumber"]) || "-";
+    const policyId = pickFirst(selected, ["id"]);
+    const number = pickFirst(selected, ["number", "policy_number", "policyNumber"]) || "";
     const statusRaw = pickFirst(selected, ["status", "policy_status"]) || "-";
     const status = mapStatus(statusRaw, POLICY_STATUS_LABELS);
 
@@ -192,25 +213,22 @@ export default function DashboardHome() {
 
     const vehicleLabel =
       pickFirst(vehicle, ["label", "display", "name"]) ||
-      [
-        pickFirst(vehicle, ["brand", "make"]),
-        pickFirst(vehicle, ["model"]),
-        pickFirst(vehicle, ["year"]),
-      ]
+      [pickFirst(vehicle, ["brand", "make"]), pickFirst(vehicle, ["model"]), pickFirst(vehicle, ["year"])]
         .filter(Boolean)
-        .join(" ") ||
-      "-";
+        .join(" ");
 
-    const plate = pickFirst(vehicle, ["plate", "license_plate", "patent"]) || "-";
+    const plate = pickFirst(vehicle, ["plate", "license_plate", "patent"]) || "";
 
-    const productName = getProductName(selected) || "-";
+    const productName = getProductName(selected) || "";
 
     // Timeline (soft/hard)
-    const clientEnd = pickFirst(timeline, ["client_end_date"]) || pickFirst(selected, ["client_end_date"]);
+    const clientEnd =
+      pickFirst(timeline, ["client_end_date"]) || pickFirst(selected, ["client_end_date"]);
     const paymentEnd =
       pickFirst(timeline, ["payment_end_date"]) ||
       pickFirst(timeline, ["real_end_date"]) ||
       pickFirst(selected, ["payment_end_date"]);
+    const paymentStart = pickFirst(timeline, ["payment_start_date"]);
 
     // Billing current (si existe)
     const periodStatusRaw = pickFirst(billingCurrent, ["status", "state"]) || null;
@@ -223,14 +241,36 @@ export default function DashboardHome() {
     // - si existe billing_current y no está PAID, asumimos que puede haber pago pendiente.
     const isPaid = String(periodStatusRaw || "").toUpperCase() === "PAID";
     const hasBillingPeriod = Boolean(billingCurrent);
-    const inWindowByTimeline = isTodayInRange(
-      pickFirst(timeline, ["payment_start_date"]),
-      pickFirst(timeline, ["payment_end_date"])
-    );
+    const inWindowByTimeline = isTodayInRange(paymentStart, paymentEnd);
     const inPaymentWindow =
       hasBillingPeriod && !isPaid && (inWindowByTimeline == null ? true : inWindowByTimeline);
 
+    let billingUiState = null;
+    if (hasBillingPeriod) {
+      if (isPaid) {
+        billingUiState = "PAID";
+      } else {
+        const todayStamp = toDayStamp(new Date());
+        const payStartStamp = toDayStamp(paymentStart);
+        const softEndStamp = toDayStamp(clientEnd);
+        const hardEndStamp = toDayStamp(paymentEnd);
+
+        if (payStartStamp != null && todayStamp != null && todayStamp < payStartStamp) {
+          billingUiState = "PAID";
+        } else if (softEndStamp != null && todayStamp != null && todayStamp <= softEndStamp) {
+          billingUiState = "PENDING";
+        } else if (hardEndStamp != null && todayStamp != null && todayStamp <= hardEndStamp) {
+          billingUiState = "NO_COVERAGE";
+        } else if (hardEndStamp != null && todayStamp != null && todayStamp > hardEndStamp) {
+          billingUiState = "OVERDUE";
+        } else {
+          billingUiState = "PENDING";
+        }
+      }
+    }
+
     return {
+      id: policyId,
       number,
       status,
       start,
@@ -239,12 +279,33 @@ export default function DashboardHome() {
       plate,
       productName,
       clientEnd,
+      paymentStart,
       paymentEnd,
       inPaymentWindow,
       billingStatus: periodStatus,
+      billingUiState,
       invoiceAmount: amount,
     };
   }, [selected, billingCurrent, timeline]);
+
+  const onPayNow = async () => {
+    if (!policyView?.id || payBusy) return;
+    setPayBusy(true);
+    setPayErr("");
+    try {
+      const res = await paymentsApi.createPreference(policyView.id);
+      const url = res?.init_point;
+      if (!url) {
+        setPayErr("No se pudo iniciar el pago.");
+        return;
+      }
+      window.location.href = url;
+    } catch (e) {
+      setPayErr(e?.response?.data?.detail || "No se pudo iniciar el pago.");
+    } finally {
+      setPayBusy(false);
+    }
+  };
 
   return (
     <div className="dash-page">
@@ -305,10 +366,12 @@ export default function DashboardHome() {
             </div>
 
             <div className="dash-grid">
-              <div className="dash-item">
-                <div className="dash-k">Plan</div>
-                <div className="dash-v">{policyView.productName}</div>
-              </div>
+                {policyView.productName ? (
+                  <div className="dash-item">
+                    <div className="dash-k">Plan</div>
+                    <div className="dash-v">{policyView.productName}</div>
+                  </div>
+                ) : null}
 
               <div className="dash-item">
                 <div className="dash-k">Vigencia</div>
@@ -317,15 +380,19 @@ export default function DashboardHome() {
                 </div>
               </div>
 
-              <div className="dash-item">
-                <div className="dash-k">Vehículo</div>
-                <div className="dash-v">{policyView.vehicleLabel}</div>
-              </div>
+                {policyView.vehicleLabel ? (
+                  <div className="dash-item">
+                    <div className="dash-k">Vehículo</div>
+                    <div className="dash-v">{policyView.vehicleLabel}</div>
+                  </div>
+                ) : null}
 
-              <div className="dash-item">
-                <div className="dash-k">Patente</div>
-                <div className="dash-v mono">{policyView.plate}</div>
-              </div>
+                {policyView.plate ? (
+                  <div className="dash-item">
+                    <div className="dash-k">Patente</div>
+                    <div className="dash-v mono">{policyView.plate}</div>
+                  </div>
+                ) : null}
             </div>
           </section>
 
@@ -338,45 +405,83 @@ export default function DashboardHome() {
               </div>
             </div>
 
-            {policyView.inPaymentWindow ? (
+            {policyView.billingUiState ? (
               <div className="dash-pay">
-                <div className="dash-grid">
-                  <div className="dash-item">
-                    <div className="dash-k">Monto</div>
-                    <div className="dash-v">{fmtMoney(policyView.invoiceAmount)}</div>
-                  </div>
+                {policyView.billingUiState === "PAID" ? (
+                  <>
+                    <div className="dash-grid">
+                      <div className="dash-item">
+                        <div className="dash-k">Estado</div>
+                        <div className="dash-v">{BILLING_UI_LABELS.PAID}</div>
+                      </div>
+                    </div>
 
-                  <div className="dash-item">
-                    <div className="dash-k">Vence (cliente)</div>
-                    <div className="dash-v">{fmtDate(policyView.clientEnd)}</div>
-                  </div>
+                    <div className="dash-actions">
+                      <button
+                        className="btn-secondary"
+                        type="button"
+                        onClick={() => alert("Luego abrimos detalle del período / factura.")}
+                      >
+                        Ver detalle
+                      </button>
+                    </div>
+                  </>
+                ) : policyView.billingUiState === "OVERDUE" ? (
+                  <>
+                    <div className="dash-grid">
+                      <div className="dash-item">
+                        <div className="dash-k">Estado</div>
+                        <div className="dash-v">{BILLING_UI_LABELS.OVERDUE}</div>
+                      </div>
+                    </div>
 
-                  <div className="dash-item">
-                    <div className="dash-k">Estado</div>
-                    <div className="dash-v">{policyView.billingStatus || "-"}</div>
-                  </div>
-                </div>
+                    <div className="dash-hint">
+                      Para continuar con el servicio, comunicate con la aseguradora.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="dash-grid">
+                      <div className="dash-item">
+                        <div className="dash-k">Monto</div>
+                        <div className="dash-v">{fmtMoney(policyView.invoiceAmount)}</div>
+                      </div>
 
-                <div className="dash-actions">
-                  <button
-                    className="btn-primary"
-                    type="button"
-                    onClick={() => alert("Luego conectamos 'Pagar ahora' con Mercado Pago.")}
-                  >
-                    Pagar ahora
-                  </button>
+                      <div className="dash-item">
+                        <div className="dash-k">Vence (cliente)</div>
+                        <div className="dash-v">{fmtDate(policyView.clientEnd)}</div>
+                      </div>
 
-                  <button
-                    className="btn-secondary"
-                    type="button"
-                    onClick={() => alert("Luego abrimos detalle del período / factura.")}
-                  >
-                    Ver detalle
-                  </button>
-                </div>
+                      <div className="dash-item">
+                        <div className="dash-k">Estado</div>
+                        <div className="dash-v">
+                          {BILLING_UI_LABELS[policyView.billingUiState] || "-"}
+                        </div>
+                      </div>
+                    </div>
 
-                <div className="dash-hint">
-                </div>
+                    <div className="dash-actions">
+                      <button
+                        className="btn-primary"
+                        type="button"
+                        onClick={onPayNow}
+                        disabled={payBusy}
+                      >
+                        {payBusy ? "Conectando…" : "Pagar ahora"}
+                      </button>
+
+                      <button
+                        className="btn-secondary"
+                        type="button"
+                        onClick={() => alert("Luego abrimos detalle del período / factura.")}
+                      >
+                        Ver detalle
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {payErr ? <div className="dash-hint">{payErr}</div> : null}
               </div>
             ) : (
               <div className="dash-muted">No tenés facturas pendientes en este momento.</div>

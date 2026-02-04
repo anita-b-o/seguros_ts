@@ -24,7 +24,7 @@ from .billing import (
     reactivate_policy_if_applicable,
     recalc_current_period_amount,
 )
-from .models import BillingPeriod, Payment, Receipt, PaymentWebhookEvent
+from .models import BillingPeriod, Payment, Receipt, PaymentWebhookEvent, PaymentBatch
 from audit.helpers import audit_log, snapshot_entity
 from common import metrics
 from .serializers import PaymentSerializer
@@ -437,6 +437,147 @@ def _process_mp_webhook_for_payment(
     return Response({"detail": "ok"})
 
 
+def _process_mp_webhook_for_batch(
+    batch,
+    payload_dict,
+    mp_payment_id,
+    status_str,
+    preference_id,
+    amount_raw,
+):
+    event_id = _get_mp_webhook_event_id(payload_dict)
+    metrics.webhooks_processed_total.inc()
+
+    with transaction.atomic():
+        if not _try_create_mp_webhook_event(None, event_id, payload_dict):
+            metrics.webhooks_duplicate_total.inc()
+            audit_log(
+                action="webhook_duplicate",
+                entity_type="PaymentBatch",
+                entity_id=str(batch.pk),
+                extra={"event_id": event_id},
+                request=None,
+            )
+            return Response({"detail": "ok"})
+
+        locked_batch = PaymentBatch.objects.select_for_update().get(pk=batch.pk)
+
+        if preference_id and locked_batch.mp_preference_id and preference_id != locked_batch.mp_preference_id:
+            return Response({"detail": "mp_preference_id no coincide"}, status=400)
+
+        if amount_raw is not None:
+            try:
+                incoming_amount = Decimal(str(amount_raw))
+                if locked_batch.total_amount and incoming_amount != Decimal(str(locked_batch.total_amount)):
+                    return Response(
+                        {"detail": "El monto informado no coincide con el pago registrado."},
+                        status=400,
+                    )
+            except Exception:
+                return Response({"detail": "Monto inválido en webhook."}, status=400)
+
+        status_norm = (status_str or "").lower()
+        desired_state = _map_status_to_state(status_norm)
+        if not _is_state_transition_allowed(locked_batch.state, desired_state):
+            logger.warning(
+                "mp_webhook_batch_state_transition_blocked",
+                extra={
+                    "batch_id": str(locked_batch.pk),
+                    "current_state": locked_batch.state,
+                    "desired_state": desired_state,
+                    "event_id": event_id,
+                },
+            )
+            return Response({"detail": "ok"})
+
+        locked_batch.mp_payment_id = mp_payment_id or locked_batch.mp_payment_id
+        locked_batch.state = desired_state
+        locked_batch.save(update_fields=["mp_payment_id", "state", "updated_at"])
+
+        payment_ids = locked_batch.payment_ids or []
+        payments = (
+            Payment.objects.select_related("policy", "billing_period")
+            .select_for_update()
+            .filter(id__in=payment_ids)
+        )
+
+        receipts_to_render = []
+        for payment in payments:
+            policy = payment.policy
+            if policy and policy.status in ADMIN_MANAGED_STATUSES:
+                logger.warning(
+                    "mp_webhook_batch_admin_managed_policy",
+                    extra={
+                        "payment_id": payment.id,
+                        "policy_id": payment.policy_id,
+                        "batch_id": str(locked_batch.pk),
+                        "event_id": event_id,
+                    },
+                )
+                continue
+
+            if status_norm == "approved":
+                if payment.state != "APR":
+                    payment.state = "APR"
+                    payment.mp_payment_id = mp_payment_id or payment.mp_payment_id
+                    payment.save(update_fields=["state", "mp_payment_id", "updated_at", "last_state_change_at"])
+
+                    billing_period = payment.billing_period
+                    if billing_period and billing_period.status != BillingPeriod.Status.PAID:
+                        locked_period = BillingPeriod.objects.select_for_update().get(pk=billing_period.pk)
+                        if locked_period.status != BillingPeriod.Status.PAID:
+                            locked_period.mark_paid()
+                            reactivate_policy_if_applicable(policy)
+
+                    mp_auth_code = str(mp_payment_id or "")
+                    receipt_exists = Receipt.objects.filter(
+                        policy=policy,
+                        method="mercadopago",
+                        auth_code=mp_auth_code,
+                    ).exists()
+                    if not receipt_exists:
+                        receipt = Receipt.objects.create(
+                            policy=policy,
+                            amount=payment.amount,
+                            concept="Pago con Mercado Pago",
+                            method="mercadopago",
+                            auth_code=mp_auth_code,
+                            next_due=None,
+                        )
+                        receipts_to_render.append((payment.id, receipt.id))
+            elif status_norm == "rejected":
+                payment.state = "REJ"
+                payment.mp_payment_id = mp_payment_id or payment.mp_payment_id
+                payment.save(update_fields=["state", "mp_payment_id", "updated_at", "last_state_change_at"])
+            else:
+                payment.state = "PEN"
+                payment.mp_payment_id = mp_payment_id or payment.mp_payment_id
+                payment.save(update_fields=["state", "mp_payment_id", "updated_at", "last_state_change_at"])
+
+    for payment_id, receipt_id in receipts_to_render:
+        try:
+            payment_for_pdf = Payment.objects.select_related(
+                "policy__vehicle", "policy__product", "policy__user"
+            ).get(pk=payment_id)
+            rel_path = generate_receipt_pdf(payment_for_pdf)
+        except Exception as exc:
+            logger.exception(
+                "mp_webhook_batch_receipt_pdf_failed",
+                extra={
+                    "payment_id": payment_id,
+                    "receipt_id": receipt_id,
+                    "error": str(exc),
+                },
+            )
+        else:
+            if rel_path:
+                payment_for_pdf.receipt_pdf.name = rel_path
+                payment_for_pdf.save(update_fields=["receipt_pdf"])
+                Receipt.objects.filter(pk=receipt_id).update(file=rel_path)
+
+    return Response({"detail": "ok"})
+
+
 def _mp_create_preference(payload):
     headers = _mp_headers()
     if not headers:
@@ -480,7 +621,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
     serializer_class = PaymentSerializer
 
     def get_permissions(self):
-        if self.action in ['create_preference', 'pending']:
+        if self.action in ['create_preference', 'create_batch_preference', 'pending']:
             return [permissions.IsAuthenticated()]
         return [permissions.IsAdminUser()]
 
@@ -762,6 +903,255 @@ class PaymentViewSet(viewsets.ModelViewSet):
             "init_point": init_point,
         })
 
+    @action(detail=False, methods=['post'], url_path='policies/create_batch_preference')
+    def create_batch_preference(self, request):
+        policy_ids = request.data.get("policy_ids") or request.data.get("policies") or []
+        if not isinstance(policy_ids, list) or not policy_ids:
+            return Response({"detail": "policy_ids debe ser una lista no vacía."}, status=400)
+
+        user = request.user
+        now = timezone.localdate()
+        payments = []
+        items = []
+        total = Decimal("0")
+        currency = None
+
+        with transaction.atomic():
+            for pid in policy_ids:
+                policy = get_scoped_policy_or_404(request, id=pid)
+                if policy.status in ADMIN_MANAGED_STATUSES:
+                    return Response(
+                        {"detail": "Una de las pólizas está en estado administrado y no acepta pagos online."},
+                        status=403,
+                    )
+
+                billing_period = ensure_current_billing_period(policy, now=now)
+                if not billing_period:
+                    return _error_response(
+                        "No hay un periodo facturable vigente.",
+                        ERROR_NO_PAYABLE_PERIOD,
+                    )
+                try:
+                    assert_is_current_period(billing_period, today=now)
+                except ValueError as exc:
+                    return _error_response(str(exc), ERROR_FUTURE_PERIOD_NOT_PAYABLE, status=400)
+
+                locked_period = BillingPeriod.objects.select_for_update().get(pk=billing_period.pk)
+                mark_overdue_and_suspend_if_needed(policy, locked_period, now=now)
+                recalc_current_period_amount(policy, locked_period, now=now)
+
+                if locked_period.status == BillingPeriod.Status.PAID:
+                    return _error_response(
+                        "El periodo ya fue pagado y no se puede iniciar otro cobro.",
+                        ERROR_PERIOD_ALREADY_PAID,
+                    )
+
+                if locked_period.due_date_hard and now > locked_period.due_date_hard:
+                    return _error_response(
+                        "El periodo está vencido y no se puede pagar online.",
+                        ERROR_PERIOD_OVERDUE_NOT_PAYABLE,
+                        status=400,
+                    )
+
+                amount = locked_period.amount
+                if amount <= 0:
+                    return Response({"detail": "Monto inválido para iniciar el pago."}, status=400)
+
+                if currency is None:
+                    currency = locked_period.currency or "ARS"
+                elif currency != (locked_period.currency or "ARS"):
+                    return Response(
+                        {"detail": "No se pueden pagar pólizas con distintas monedas en un solo pago."},
+                        status=400,
+                    )
+
+                period_code = locked_period.period_code
+                payment_qs = (
+                    Payment.objects.select_for_update()
+                    .filter(policy=policy, billing_period=locked_period)
+                    .order_by("-id")
+                )
+                locked_payment = payment_qs.first()
+                if locked_payment and locked_payment.state == "APR":
+                    return _error_response(
+                        "Ya existe un pago aprobado para uno de los periodos seleccionados.",
+                        ERROR_PERIOD_ALREADY_PAID,
+                    )
+                if locked_payment and locked_payment.state == "REJ":
+                    locked_payment.state = "PEN"
+                    locked_payment.mp_preference_id = ""
+                    locked_payment.mp_payment_id = ""
+                    locked_payment.save(update_fields=["state", "mp_preference_id", "mp_payment_id"])
+                    payment = locked_payment
+                elif locked_payment:
+                    payment = locked_payment
+                    update_fields = []
+                    if locked_payment.period != period_code:
+                        locked_payment.period = period_code
+                        update_fields.append("period")
+                    if locked_payment.amount != amount:
+                        locked_payment.amount = amount
+                        update_fields.append("amount")
+                    if locked_payment.billing_period_id != locked_period.id:
+                        locked_payment.billing_period = locked_period
+                        update_fields.append("billing_period")
+                    if update_fields:
+                        locked_payment.save(update_fields=update_fields)
+                else:
+                    payment = Payment.objects.create(
+                        policy=policy,
+                        billing_period=locked_period,
+                        period=period_code,
+                        amount=amount,
+                    )
+                    metrics.payments_created_total.inc()
+                    audit_log(
+                        action="payment_created",
+                        entity_type="Payment",
+                        entity_id=str(payment.pk),
+                        after=snapshot_entity(payment),
+                        request=request,
+                        actor=request.user,
+                        extra={
+                            "policy_id": policy.id,
+                            "billing_period_id": locked_period.id,
+                            "amount": float(amount),
+                        },
+                    )
+
+                payments.append(payment)
+                total += Decimal(str(amount))
+                items.append(
+                    {
+                        "title": f"Póliza {policy.number} {period_code}",
+                        "quantity": 1,
+                        "unit_price": float(amount),
+                        "currency_id": currency,
+                    }
+                )
+
+            batch = PaymentBatch.objects.create(
+                user=user,
+                payment_ids=[p.id for p in payments],
+                policy_ids=[int(x) for x in policy_ids],
+                total_amount=total,
+                currency=currency or "ARS",
+            )
+
+        headers = _mp_headers()
+        if not headers:
+            if not _mp_fake_payments_allowed():
+                batch.state = "REJ"
+                batch.save(update_fields=["state", "updated_at"])
+                Payment.objects.filter(id__in=batch.payment_ids).update(
+                    state="REJ",
+                    mp_preference_id="",
+                    mp_payment_id="",
+                )
+                return Response(
+                    {
+                        "detail": "Mercado Pago no está configurado (MP_ACCESS_TOKEN ausente). "
+                                  "Definí MP_ACCESS_TOKEN o habilitá MP_ALLOW_FAKE_PREFERENCES para modo demo."
+                    },
+                    status=503,
+                )
+
+            batch.state = "APR"
+            batch.mp_preference_id = f"offline-{batch.id}"
+            batch.mp_payment_id = "offline"
+            batch.save(update_fields=["state", "mp_preference_id", "mp_payment_id"])
+
+            for payment in Payment.objects.select_related("policy", "billing_period").filter(
+                id__in=batch.payment_ids
+            ):
+                payment.state = "APR"
+                payment.mp_preference_id = batch.mp_preference_id
+                payment.mp_payment_id = "offline"
+                payment.save(update_fields=["state", "mp_preference_id", "mp_payment_id"])
+
+                billing_period = payment.billing_period
+                if billing_period and billing_period.status != BillingPeriod.Status.PAID:
+                    billing_period.mark_paid()
+                    reactivate_policy_if_applicable(payment.policy)
+
+                receipt = Receipt.objects.create(
+                    policy=payment.policy,
+                    amount=payment.amount,
+                    concept="Pago con Mercado Pago (modo demo)",
+                    method="manual",
+                    auth_code="offline",
+                    next_due=None,
+                )
+                rel_path = generate_receipt_pdf(payment)
+                if rel_path:
+                    payment.receipt_pdf.name = rel_path
+                    payment.save(update_fields=["receipt_pdf"])
+                    receipt.file.name = rel_path
+                    receipt.save(update_fields=["file"])
+
+            fake_init_point = (
+                f"https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id={batch.mp_preference_id}"
+            )
+            return Response(
+                {
+                    "batch_id": str(batch.id),
+                    "payment_ids": batch.payment_ids,
+                    "preference_id": batch.mp_preference_id,
+                    "init_point": fake_init_point,
+                    "offline": True,
+                }
+            )
+
+        notification_url = _mp_notification_url(request)
+        preference_payload = {
+            "items": items,
+            "external_reference": str(batch.id),
+            "metadata": {
+                "batch_id": str(batch.id),
+                "payment_ids": batch.payment_ids,
+            },
+            "statement_descriptor": "SAN CAYETANO",
+        }
+        if notification_url:
+            preference_payload["notification_url"] = notification_url
+
+        pref_data, err = _mp_create_preference(preference_payload)
+        if pref_data is None:
+            batch.state = "REJ"
+            batch.save(update_fields=["state", "updated_at"])
+            Payment.objects.filter(id__in=batch.payment_ids).update(
+                state="REJ",
+                mp_preference_id="",
+                mp_payment_id="",
+            )
+            return Response({"detail": err}, status=502)
+
+        preference_id = pref_data.get("id") or pref_data.get("preference_id")
+        init_point = pref_data.get("init_point") or pref_data.get("sandbox_init_point")
+        if not preference_id or not init_point:
+            batch.state = "REJ"
+            batch.save(update_fields=["state", "updated_at"])
+            Payment.objects.filter(id__in=batch.payment_ids).update(
+                state="REJ",
+                mp_preference_id="",
+                mp_payment_id="",
+            )
+            return Response({"detail": "Mercado Pago no devolvió preference_id/init_point."}, status=502)
+
+        batch.mp_preference_id = preference_id
+        batch.save(update_fields=["mp_preference_id"])
+
+        Payment.objects.filter(id__in=batch.payment_ids).update(mp_preference_id=preference_id)
+
+        return Response(
+            {
+                "batch_id": str(batch.id),
+                "payment_ids": batch.payment_ids,
+                "preference_id": preference_id,
+                "init_point": init_point,
+            }
+        )
+
     @action(detail=False, methods=['get'], url_path='pending')
     def pending(self, request):
         policy_id = request.query_params.get("policy_id")
@@ -882,10 +1272,25 @@ def mp_webhook(request):
     if not pid:
         return Response({'detail':'payment_id/external_reference requerido'}, status=400)
 
+    payment = None
+    batch = None
     try:
         payment = Payment.objects.get(id=pid)
-    except Payment.DoesNotExist:
-        return Response({'detail':'payment_id inválido'}, status=400)
+    except (Payment.DoesNotExist, ValueError):
+        try:
+            batch = PaymentBatch.objects.get(id=pid)
+        except (PaymentBatch.DoesNotExist, ValueError):
+            return Response({'detail':'payment_id inválido'}, status=400)
+
+    if batch:
+        return _process_mp_webhook_for_batch(
+            batch,
+            payload_dict,
+            mp_payment_id,
+            status_str,
+            preference_id,
+            amount_raw,
+        )
 
     return _process_mp_webhook_for_payment(
         payment,

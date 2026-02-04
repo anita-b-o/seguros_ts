@@ -4,19 +4,14 @@ import { useDispatch } from "react-redux";
 import { openReceiptModal, receiptsKey } from "@/features/receipts/receiptsSlice";
 
 import PolicyCardHeader from "./PolicyCardHeader";
-import PolicyTabs from "./PolicyTabs";
 import ReceiptsList from "./ReceiptsList";
-import BillingCurrentPanel from "./BillingCurrentPanel";
 
 export default function PolicyReceiptsCard({
   policy,
   isOpen,
-  tab,
   page,
   receiptsByPolicyPage,
-  billingCurrentByPolicy,
   onToggle,
-  onSwitchTab,
   onChangePage,
   onEnsureLoaded,
 }) {
@@ -30,8 +25,6 @@ export default function PolicyReceiptsCard({
   }, [isOpen]);
 
   const receiptsState = receiptsByPolicyPage?.[receiptsKey(policyId, page)];
-  const billingState = billingCurrentByPolicy?.[policyId];
-
   return (
     <div className={`rcpt-policyCard ${isOpen ? "is-open" : ""}`}>
       <button className="rcpt-policyHead" onClick={onToggle} type="button">
@@ -41,20 +34,14 @@ export default function PolicyReceiptsCard({
 
       {isOpen ? (
         <div className="rcpt-policyBody">
-          <PolicyTabs tab={tab} onChange={onSwitchTab} />
-
-          {tab === "receipts" ? (
-            <ReceiptsList
-              policy={policy}
-              state={receiptsState}
-              page={page}
-              onClickReceipt={(r) => dispatch(openReceiptModal({ policy, receipt: r }))}
-              onPrev={() => onChangePage(Math.max(1, page - 1))}
-              onNext={() => onChangePage(page + 1)}
-            />
-          ) : (
-            <BillingCurrentPanel state={billingState} />
-          )}
+          <ReceiptsList
+            policy={policy}
+            state={receiptsState}
+            page={page}
+            onClickReceipt={(r) => dispatch(openReceiptModal({ policy, receipt: r }))}
+            onPrev={() => onChangePage(Math.max(1, page - 1))}
+            onNext={() => onChangePage(page + 1)}
+          />
         </div>
       ) : null}
     </div>

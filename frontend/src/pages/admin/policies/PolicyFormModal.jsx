@@ -37,20 +37,6 @@ function pickFirst(obj, keys) {
   return null;
 }
 
-function addMonthsISO(startISO, months = 3) {
-  if (!startISO) return "";
-  const [y, m, d] = String(startISO).split("-").map(Number);
-  if (!y || !m || !d) return "";
-
-  const year = y + Math.floor((m - 1 + months) / 12);
-  const month = ((m - 1 + months) % 12) + 1;
-  const lastDay = new Date(year, month, 0).getDate();
-  const day = Math.min(d, lastDay);
-
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${year}-${pad(month)}-${pad(day)}`;
-}
-
 function parseISODate(iso) {
   if (!iso || typeof iso !== "string") return null;
   const [y, m, d] = iso.split("-").map(Number);
@@ -167,6 +153,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
   const [quoteLink, setQuoteLink] = useState("");
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState("");
+  const [showVehicleExtras, setShowVehicleExtras] = useState(false);
 
   const [vehicle, setVehicle] = useState({
     plate: "",
@@ -182,8 +169,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     gnc_amount: "",
   });
   const [vehicleError, setVehicleError] = useState("");
-
-  const endDatePreview = useMemo(() => addMonthsISO(startDate, 3), [startDate]);
 
   const canSubmit =
     !!safeStr(number).trim() &&
@@ -220,6 +205,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       setQuoteLink("");
       setQuoteError("");
       setVehicleError("");
+      setShowVehicleExtras(false);
       setVehicle({
         plate: "",
         make: "",
@@ -634,33 +620,36 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               </label>
             ) : null}
 
+            <label className="form-label">
+              Cliente
+              {usersErr ? <div className="field-err">{usersErr}</div> : null}
+
+              <select
+                className={`form-input ${getFieldErr("user_id") ? "is-invalid" : ""}`}
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                disabled={loadingUsers}
+              >
+                <option value="">
+                  {loadingUsers ? "Cargando clientes…" : "Sin cliente"}
+                </option>
+
+                {selectedMissing ? (
+                  <option value={userId}>Cliente actual (id #{userId})</option>
+                ) : null}
+
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {clientLabel(u)}
+                  </option>
+                ))}
+              </select>
+
+              {getFieldErr("user_id") && <div className="field-err">{getFieldErr("user_id")}</div>}
+            </label>
+
             {!isEdit && (
               <>
-                <div className="form-label">
-                  Link de cotización (opcional)
-                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                    <input
-                      className="form-input"
-                      value={quoteLink}
-                      onChange={(e) => setQuoteLink(e.target.value)}
-                      placeholder="https://.../quote/share/ABC123"
-                      disabled={quoteLoading}
-                    />
-                    <button
-                      className="btn-secondary"
-                      type="button"
-                      onClick={onLoadQuote}
-                      disabled={quoteLoading}
-                    >
-                      {quoteLoading ? "Cargando…" : "Cargar"}
-                    </button>
-                  </div>
-                  {quoteError ? <div className="field-err">{quoteError}</div> : null}
-                  <div className="table-muted" style={{ marginTop: 6 }}>
-                    Podés pegar el link completo o solo el token.
-                  </div>
-                </div>
-
                 <label className="form-label">
                   Tipo de seguro
                   <select
@@ -693,197 +682,212 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                   />
                 </label>
 
-                <label className="form-label">
-                  Fecha fin (calculada)
-                  <input className="form-input" value={endDatePreview} disabled />
-                </label>
-
-                <div className="table-card" style={{ padding: 12 }}>
-                  <div className="table-head" style={{ marginBottom: 10 }}>
-                    <div className="table-title">Vehículo (opcional)</div>
-                    <div className="table-muted">Podés cargarlo ahora o más adelante.</div>
-                  </div>
-
-                  {vehicleError ? <div className="field-err">{vehicleError}</div> : null}
-
-                  <div
+                <div className="form-label">
+                  <button
+                    className="btn-link"
+                    type="button"
+                    onClick={() => setShowVehicleExtras((prev) => !prev)}
                     style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                      gap: 10,
+                      marginTop: 6,
+                      alignSelf: "flex-start",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontWeight: 600,
+                      color: "#000",
                     }}
                   >
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Patente
-                      <input
-                        className="form-input"
-                        value={vehicle.plate}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, plate: e.target.value }))
-                        }
-                        placeholder="AB123CD"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Marca
-                      <input
-                        className="form-input"
-                        value={vehicle.make}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, make: e.target.value }))
-                        }
-                        placeholder="Toyota"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Modelo
-                      <input
-                        className="form-input"
-                        value={vehicle.model}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, model: e.target.value }))
-                        }
-                        placeholder="Corolla"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Año
-                      <input
-                        className="form-input"
-                        value={vehicle.year}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, year: e.target.value }))
-                        }
-                        placeholder="2020"
-                        inputMode="numeric"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Versión
-                      <input
-                        className="form-input"
-                        value={vehicle.version}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, version: e.target.value }))
-                        }
-                        placeholder="1.6 XEi"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Ciudad
-                      <input
-                        className="form-input"
-                        value={vehicle.city}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, city: e.target.value }))
-                        }
-                        placeholder="CABA"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Uso
-                      <input
-                        className="form-input"
-                        value={vehicle.usage}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, usage: e.target.value }))
-                        }
-                        placeholder="Particular"
-                      />
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Monto GNC
-                      <input
-                        className="form-input"
-                        value={vehicle.gnc_amount}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, gnc_amount: e.target.value }))
-                        }
-                        placeholder="4000"
-                        inputMode="numeric"
-                      />
-                    </label>
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 12,
-                      marginTop: 10,
-                    }}
-                  >
-                    <label className="form-label" style={{ margin: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={vehicle.has_garage}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, has_garage: e.target.checked }))
-                        }
-                      />{" "}
-                      Tiene garage
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={vehicle.is_zero_km}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, is_zero_km: e.target.checked }))
-                        }
-                      />{" "}
-                      0 km
-                    </label>
-
-                    <label className="form-label" style={{ margin: 0 }}>
-                      <input
-                        type="checkbox"
-                        checked={vehicle.has_gnc}
-                        onChange={(e) =>
-                          setVehicle((prev) => ({ ...prev, has_gnc: e.target.checked }))
-                        }
-                      />{" "}
-                      Tiene GNC
-                    </label>
-                  </div>
+                    Cargar datos de vehículo
+                    <span aria-hidden="true">{showVehicleExtras ? "▾" : "▸"}</span>
+                  </button>
                 </div>
+
+                {showVehicleExtras ? (
+                  <>
+                    <div className="form-label">
+                      Link de cotización
+                      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                        <input
+                          className="form-input"
+                          value={quoteLink}
+                          onChange={(e) => setQuoteLink(e.target.value)}
+                          placeholder="https://.../quote/share/ABC123"
+                          disabled={quoteLoading}
+                        />
+                        <button
+                          className="btn-secondary"
+                          type="button"
+                          onClick={onLoadQuote}
+                          disabled={quoteLoading}
+                        >
+                          {quoteLoading ? "Cargando…" : "Cargar"}
+                        </button>
+                      </div>
+                      {quoteError ? <div className="field-err">{quoteError}</div> : null}
+                      <div className="table-muted" style={{ marginTop: 6 }}>
+                        Podés pegar el link de cotización para cargar los datos del vehiculo o ingresarlos uno a uno.
+                      </div>
+                    </div>
+
+                    <div className="table-card" style={{ padding: 12 }}>
+                      <div className="table-head" style={{ marginBottom: 10 }}>
+                        <div className="table-title">Vehículo</div>
+                      </div>
+
+                      {vehicleError ? <div className="field-err">{vehicleError}</div> : null}
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                          gap: 10,
+                        }}
+                      >
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Patente
+                          <input
+                            className="form-input"
+                            value={vehicle.plate}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, plate: e.target.value }))
+                            }
+                            placeholder="AB123CD"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Marca
+                          <input
+                            className="form-input"
+                            value={vehicle.make}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, make: e.target.value }))
+                            }
+                            placeholder="Toyota"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Modelo
+                          <input
+                            className="form-input"
+                            value={vehicle.model}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, model: e.target.value }))
+                            }
+                            placeholder="Corolla"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Año
+                          <input
+                            className="form-input"
+                            value={vehicle.year}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, year: e.target.value }))
+                            }
+                            placeholder="2020"
+                            inputMode="numeric"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Versión
+                          <input
+                            className="form-input"
+                            value={vehicle.version}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, version: e.target.value }))
+                            }
+                            placeholder="1.6 XEi"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Ciudad
+                          <input
+                            className="form-input"
+                            value={vehicle.city}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, city: e.target.value }))
+                            }
+                            placeholder="CABA"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Uso
+                          <input
+                            className="form-input"
+                            value={vehicle.usage}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, usage: e.target.value }))
+                            }
+                            placeholder="Particular"
+                          />
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          Monto GNC
+                          <input
+                            className="form-input"
+                            value={vehicle.gnc_amount}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, gnc_amount: e.target.value }))
+                            }
+                            placeholder="4000"
+                            inputMode="numeric"
+                          />
+                        </label>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 12,
+                          marginTop: 10,
+                        }}
+                      >
+                        <label className="form-label" style={{ margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={vehicle.has_garage}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, has_garage: e.target.checked }))
+                            }
+                          />{" "}
+                          Tiene garage
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={vehicle.is_zero_km}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, is_zero_km: e.target.checked }))
+                            }
+                          />{" "}
+                          0 km
+                        </label>
+
+                        <label className="form-label" style={{ margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={vehicle.has_gnc}
+                            onChange={(e) =>
+                              setVehicle((prev) => ({ ...prev, has_gnc: e.target.checked }))
+                            }
+                          />{" "}
+                          Tiene GNC
+                        </label>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
               </>
             )}
-
-            <label className="form-label">
-              Cliente
-              {usersErr ? <div className="field-err">{usersErr}</div> : null}
-
-              <select
-                className={`form-input ${getFieldErr("user_id") ? "is-invalid" : ""}`}
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                disabled={loadingUsers}
-              >
-                <option value="">
-                  {loadingUsers ? "Cargando clientes…" : "Sin cliente"}
-                </option>
-
-                {selectedMissing ? (
-                  <option value={userId}>Cliente actual (id #{userId})</option>
-                ) : null}
-
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {clientLabel(u)}
-                  </option>
-                ))}
-              </select>
-
-              {getFieldErr("user_id") && <div className="field-err">{getFieldErr("user_id")}</div>}
-            </label>
 
             <div className="modal-actions">
               <button className="btn-secondary" type="button" onClick={onClose}>

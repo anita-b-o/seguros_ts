@@ -1,9 +1,12 @@
 # backend/payments/models.py
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from django.conf import settings
 
 from policies.models import Policy
 
@@ -80,6 +83,43 @@ class BillingPeriod(models.Model):
         self.status = self.Status.PAID
         self.save(update_fields=["status", "updated_at"])
         return True
+
+
+class BillingNotification(models.Model):
+    class Type(models.TextChoices):
+        PERIOD_START = "period_start", "Inicio de período de pago"
+        SOFT_DUE_TOMORROW = "soft_due_tomorrow", "Mañana vence (adelantado)"
+        SOFT_DUE_TODAY = "soft_due_today", "Último día de cobertura (adelantado)"
+        NO_COVERAGE = "no_coverage", "Sin cobertura (día posterior adelantado)"
+        HARD_DUE_TODAY = "hard_due_today", "Último día real"
+        HARD_DUE_PASSED = "hard_due_passed", "Vencida (día posterior real)"
+
+    billing_period = models.ForeignKey(
+        BillingPeriod,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    notification_type = models.CharField(
+        max_length=40,
+        choices=Type.choices,
+        db_index=True,
+    )
+    trigger_date = models.DateField(db_index=True)
+    sent_to = models.EmailField(blank=True)
+    subject = models.CharField(max_length=140)
+    body = models.TextField(blank=True)
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["billing_period", "notification_type", "trigger_date"],
+                name="uniq_billing_notification_per_day",
+            )
+        ]
+        ordering = ["-sent_at"]
+        verbose_name = "Notificación de cobro"
+        verbose_name_plural = "Notificaciones de cobro"
 
 
 class Payment(models.Model):
@@ -184,6 +224,43 @@ class Payment(models.Model):
                 name="uniq_billing_period_approved",
             )
         ]
+
+
+class PaymentBatch(models.Model):
+    STATE = (
+        ("PEN", "Pendiente"),
+        ("APR", "Aprobado"),
+        ("REJ", "Rechazado"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="payment_batches",
+    )
+
+    payment_ids = models.JSONField(default=list, blank=True)
+    policy_ids = models.JSONField(default=list, blank=True)
+
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default="ARS")
+
+    state = models.CharField(max_length=3, choices=STATE, default="PEN")
+
+    mp_preference_id = models.CharField(max_length=80, blank=True)
+    mp_payment_id = models.CharField(max_length=80, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Pago en conjunto"
+        verbose_name_plural = "Pagos en conjunto"
+
+    def __str__(self):
+        return f"Lote {self.id}"
 
 
 class Receipt(models.Model):

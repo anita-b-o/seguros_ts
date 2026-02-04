@@ -35,6 +35,36 @@ export const paymentsApi = {
   },
 
   /**
+   * Crea preferencia de Mercado Pago para una póliza.
+   *
+   * POST /api/payments/policies/{policyId}/create_preference
+   */
+  async createPreference(policyId) {
+    if (!policyId) {
+      throw new Error("createPreference: policyId es requerido");
+    }
+
+    const { data } = await api.post(`/payments/policies/${policyId}/create_preference`);
+    return data;
+  },
+
+  /**
+   * Crea preferencia de Mercado Pago para múltiples pólizas.
+   *
+   * POST /api/payments/policies/create_batch_preference
+   */
+  async createBatchPreference(policyIds) {
+    if (!Array.isArray(policyIds) || policyIds.length === 0) {
+      throw new Error("createBatchPreference: policyIds es requerido");
+    }
+
+    const { data } = await api.post("/payments/policies/create_batch_preference", {
+      policy_ids: policyIds,
+    });
+    return data;
+  },
+
+  /**
    * (Opcional / futuro)
    * Si más adelante exponés pagos del cliente por póliza,
    * este método ya queda listo.

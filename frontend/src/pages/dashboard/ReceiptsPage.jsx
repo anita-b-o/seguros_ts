@@ -1,13 +1,13 @@
 // src/pages/dashboard/ReceiptsPage.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { useNavigate } from "react-router-dom";
 
 import {
   fetchClientPolicies,
   fetchReceiptsByPolicyPage,
   fetchBillingCurrentByPolicy,
 } from "@/features/receipts/receiptsSlice";
+import { paymentsApi } from "@/services/paymentsApi";
 
 import ReceiptsHeader from "@/components/receipts/ReceiptsHeader";
 import PolicyReceiptsCard from "@/components/receipts/PolicyReceiptsCard";
@@ -30,9 +30,35 @@ function fmtMoney(amount, currency = "ARS") {
 
 function fmtDate(iso) {
   if (!iso) return "-";
+  if (typeof iso === "string") {
+    const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      const local = new Date(y, mo - 1, d);
+      if (!Number.isNaN(local.getTime())) return local.toLocaleDateString("es-AR");
+    }
+  }
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
   return d.toLocaleDateString("es-AR");
+}
+
+function toDayStamp(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      return Date.UTC(y, mo - 1, d);
+    }
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 // helpers tolerantes
@@ -62,23 +88,17 @@ function getPlate(p) {
 
 export default function ReceiptsPage() {
   const dispatch = useDispatch();
-  const navigate = useNavigate();
-
-  const {
-    policies,
-    policiesLoading,
-    policiesError,
-    receiptsByPolicyPage,
-    billingCurrentByPolicy,
-  } = useSelector((s) => s.receipts);
+  const { policies, policiesLoading, policiesError, receiptsByPolicyPage, billingCurrentByPolicy } =
+    useSelector((s) => s.receipts);
 
   // UI state de cards
   const [openPolicyId, setOpenPolicyId] = useState(null);
-  const [tabByPolicy, setTabByPolicy] = useState({}); // policyId -> "receipts" | "pending"
   const [pageByPolicy, setPageByPolicy] = useState({}); // policyId -> page
 
   // ✅ selección global de pendientes (tipo “Pagos”)
   const [selectedPendingByPolicy, setSelectedPendingByPolicy] = useState({}); // policyId -> boolean
+  const [payBusy, setPayBusy] = useState(false);
+  const [payErr, setPayErr] = useState("");
 
   useEffect(() => {
     dispatch(fetchClientPolicies());
@@ -91,31 +111,14 @@ export default function ReceiptsPage() {
   }, [dispatch, policies]);
 
   const ensureLoaded = (policyId) => {
-    const tab = tabByPolicy[policyId] || "receipts";
     const page = pageByPolicy[policyId] || 1;
-
-    if (tab === "receipts") {
-      dispatch(fetchReceiptsByPolicyPage({ policyId, page, pageSize: 10 }));
-    } else {
-      dispatch(fetchBillingCurrentByPolicy({ policyId }));
-    }
+    dispatch(fetchReceiptsByPolicyPage({ policyId, page, pageSize: 10 }));
   };
 
   const onTogglePolicy = (policyId) => {
     const next = openPolicyId === policyId ? null : policyId;
     setOpenPolicyId(next);
     if (next) ensureLoaded(policyId);
-  };
-
-  const onSwitchTab = (policyId, tab) => {
-    setTabByPolicy((m) => ({ ...m, [policyId]: tab }));
-
-    if (tab === "receipts") {
-      const page = pageByPolicy[policyId] || 1;
-      dispatch(fetchReceiptsByPolicyPage({ policyId, page, pageSize: 10 }));
-    } else {
-      dispatch(fetchBillingCurrentByPolicy({ policyId }));
-    }
   };
 
   const onChangePage = (policyId, nextPage) => {
@@ -135,8 +138,11 @@ export default function ReceiptsPage() {
         const bp = st?.data || null;
         const status = String(bp?.status || "").toUpperCase();
 
-        // “Pendiente” = existe billing_current y NO está pagado
-        if (!bp || status === "PAID") return null;
+        // “Pendiente” = existe billing_current, NO está pagado y NO está vencido
+        if (!bp || status !== "UNPAID") return null;
+        const todayStamp = toDayStamp(new Date());
+        const hardStamp = toDayStamp(bp?.due_date_hard);
+        if (hardStamp != null && todayStamp != null && todayStamp > hardStamp) return null;
 
         const policyNumber = pickFirst(p, ["number", "policy_number", "policyNumber"]) || "-";
         const vehicleLabel = getVehicleLabel(p) || "—";
@@ -184,24 +190,24 @@ export default function ReceiptsPage() {
     setSelectedPendingByPolicy({});
   };
 
-  const onPaySelected = () => {
-    if (!anySelected) return;
-
-    // armamos “items” para la página de pagos
-    const items = selectedPendingItems.map((it) => ({
-      policyId: it.policyId,
-      // si el backend trae ID del billing period, pasalo:
-      billingPeriodId: it.billingCurrent?.id ?? null,
-      amount: it.amount,
-      currency: it.currency,
-      period_code: it.billingCurrent?.period_code ?? null,
-      due_date_soft: it.billingCurrent?.due_date_soft ?? null,
-      due_date_hard: it.billingCurrent?.due_date_hard ?? null,
-      policyNumber: it.policyNumber,
-      plate: it.plate || null,
-    }));
-
-    navigate("/dashboard/pagos", { state: { items } });
+  const onPaySelected = async () => {
+    if (!anySelected || payBusy) return;
+    setPayBusy(true);
+    setPayErr("");
+    try {
+      const policyIds = selectedPendingItems.map((it) => it.policyId);
+      const res = await paymentsApi.createBatchPreference(policyIds);
+      const url = res?.init_point;
+      if (!url) {
+        setPayErr("No se pudo iniciar el pago.");
+        return;
+      }
+      window.location.href = url;
+    } catch (e) {
+      setPayErr(e?.response?.data?.detail || "No se pudo iniciar el pago.");
+    } finally {
+      setPayBusy(false);
+    }
   };
 
   return (
@@ -234,14 +240,16 @@ export default function ReceiptsPage() {
                 <button
                   className="rcpt-btn rcpt-btn-primary"
                   type="button"
-                  disabled={!anySelected}
+                  disabled={!anySelected || payBusy}
                   onClick={onPaySelected}
                   title={!anySelected ? "Seleccioná al menos 1 pendiente" : "Ir a pagar"}
                 >
-                  Pagar seleccionados
+                  {payBusy ? "Conectando…" : "Pagar seleccionados"}
                 </button>
               </div>
             </div>
+
+            {payErr ? <div className="rcpt-alert">{payErr}</div> : null}
 
             <div className="rcpt-pendingBarActions">
               <button
@@ -293,22 +301,7 @@ export default function ReceiptsPage() {
                           </div>
                         </div>
 
-                        <div className="rcpt-pendingMeta">
-                          <div className="rcpt-pendingMetaRow">
-                            <span className="rcpt-pendingMetaK">Vehículo</span>
-                            <span className="rcpt-pendingMetaV">{it.vehicleLabel || "—"}</span>
-                          </div>
-                          <div className="rcpt-pendingMetaRow">
-                            <span className="rcpt-pendingMetaK">Período</span>
-                            <span className="rcpt-pendingMetaV">{bp.period_code || "—"}</span>
-                          </div>
-                          <div className="rcpt-pendingMetaRow">
-                            <span className="rcpt-pendingMetaK">Vence (cliente)</span>
-                            <span className="rcpt-pendingMetaV">
-                              <strong>{fmtDate(bp.due_date_soft)}</strong>
-                            </span>
-                          </div>
-                        </div>
+                        <div className="rcpt-pendingMeta" />
                       </div>
                     </div>
                   );
@@ -322,7 +315,6 @@ export default function ReceiptsPage() {
             {policies.map((p) => {
               const policyId = p.id;
               const isOpen = openPolicyId === policyId;
-              const tab = tabByPolicy[policyId] || "receipts";
               const page = pageByPolicy[policyId] || 1;
 
               return (
@@ -330,12 +322,9 @@ export default function ReceiptsPage() {
                   key={policyId}
                   policy={p}
                   isOpen={isOpen}
-                  tab={tab}
                   page={page}
                   receiptsByPolicyPage={receiptsByPolicyPage}
-                  billingCurrentByPolicy={billingCurrentByPolicy}
                   onToggle={() => onTogglePolicy(policyId)}
-                  onSwitchTab={(nextTab) => onSwitchTab(policyId, nextTab)}
                   onChangePage={(nextPage) => onChangePage(policyId, nextPage)}
                   onEnsureLoaded={() => ensureLoaded(policyId)}
                 />
