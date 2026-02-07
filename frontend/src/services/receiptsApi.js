@@ -48,8 +48,34 @@ export const receiptsApi = {
   async downloadReceiptPdfByFileUrl(fileUrl) {
     if (!fileUrl) throw new Error("downloadReceiptPdfByFileUrl: fileUrl es requerido");
 
-    // Si fileUrl viene absoluto (http...), axios lo soporta.
-    // responseType blob para descargar PDF.
+    const isAbsolute = /^https?:\/\//i.test(String(fileUrl));
+    const apiBase = api?.defaults?.baseURL || "";
+    const safeWindow = typeof window !== "undefined" ? window : null;
+    const apiOrigin = (() => {
+      try {
+        const base = apiBase || (safeWindow ? safeWindow.location.origin : "");
+        return new URL(base, safeWindow ? safeWindow.location.origin : "http://localhost").origin;
+      } catch {
+        return null;
+      }
+    })();
+
+    if (isAbsolute) {
+      let targetOrigin = null;
+      try {
+        targetOrigin = new URL(String(fileUrl)).origin;
+      } catch {
+        targetOrigin = null;
+      }
+
+      // Si el PDF está en un dominio externo, evitamos enviar Authorization.
+      if (apiOrigin && targetOrigin && apiOrigin !== targetOrigin) {
+        const res = await apiPublic.get(fileUrl, { responseType: "blob" });
+        return res.data; // Blob
+      }
+    }
+
+    // Si es relativo o mismo origen, usamos api (auth) normalmente.
     const res = await api.get(fileUrl, { responseType: "blob" });
     return res.data; // Blob
   },

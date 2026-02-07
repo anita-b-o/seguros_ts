@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from rest_framework import status
+from django.conf import settings
 from rest_framework.test import APIClient, APITestCase
 
 from products.models import Product
@@ -108,8 +109,8 @@ class LegacySlashCompatibilityTests(APITestCase):
         for url in self._slash_variants(base):
             response = guest.post(url, payload, format="json")
             self.assertEqual(response.status_code, status.HTTP_200_OK)
-            self.assertIn("access", response.data)
-            self.assertIn("refresh", response.data)
+            self.assertIn(settings.JWT_ACCESS_COOKIE, response.cookies)
+            self.assertIn(settings.JWT_REFRESH_COOKIE, response.cookies)
 
     def test_users_lookup_deprecated_includes_slash_variants(self):
         guest = APIClient()

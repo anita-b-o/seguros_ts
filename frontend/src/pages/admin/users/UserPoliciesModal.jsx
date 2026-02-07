@@ -1,5 +1,5 @@
 // src/pages/admin/users/UserPoliciesModal.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { adminUsersApi } from "@/services/adminUsersApi";
 import { api } from "@/api/http";
@@ -32,6 +32,8 @@ export default function UserPoliciesModal({ open, onClose, user }) {
   const [pickList, setPickList] = useState([]);
   const [loadingPick, setLoadingPick] = useState(false);
   const [selectedPolicyId, setSelectedPolicyId] = useState("");
+  const pickRequestId = useRef(0);
+  const pickSearchTimer = useRef(null);
 
   // modal confirm propio
   const [confirm, setConfirm] = useState(EMPTY_CONFIRM);
@@ -210,6 +212,7 @@ export default function UserPoliciesModal({ open, onClose, user }) {
   // Unassigned (para selector)
   // =========================
   const fetchUnassignedPolicies = async (query) => {
+    const requestId = ++pickRequestId.current;
     setLoadingPick(true);
     try {
       const params = new URLSearchParams();
@@ -227,6 +230,7 @@ export default function UserPoliciesModal({ open, onClose, user }) {
         number: p.number,
       }));
 
+      if (pickRequestId.current !== requestId) return;
       setPickList(items);
 
       if (
@@ -236,9 +240,11 @@ export default function UserPoliciesModal({ open, onClose, user }) {
         setSelectedPolicyId("");
       }
     } catch {
+      if (pickRequestId.current !== requestId) return;
       setPickList([]);
       setSelectedPolicyId("");
     } finally {
+      if (pickRequestId.current !== requestId) return;
       setLoadingPick(false);
     }
   };
@@ -254,10 +260,20 @@ export default function UserPoliciesModal({ open, onClose, user }) {
   // debounce para buscar unassigned mientras tipeás
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(() => {
+    if (pickSearchTimer.current) {
+      clearTimeout(pickSearchTimer.current);
+    }
+    pickSearchTimer.current = setTimeout(() => {
+      pickSearchTimer.current = null;
       void fetchUnassignedPolicies(q);
     }, 350);
-    return () => clearTimeout(t);
+    return () => {
+      if (pickSearchTimer.current) {
+        clearTimeout(pickSearchTimer.current);
+        pickSearchTimer.current = null;
+      }
+      pickRequestId.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, open]);
 

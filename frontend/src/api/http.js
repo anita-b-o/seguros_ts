@@ -1,7 +1,5 @@
 // frontend/src/api/http.js
 import axios from "axios";
-import { tokenStorage } from "./tokenStorage";
-
 // Alineado a tu .env.local:
 // VITE_API_URL=http://localhost:8000/api
 const BASE_URL = import.meta.env.VITE_API_URL || "/api";
@@ -12,6 +10,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || "/api";
 export const apiPublic = axios.create({
   baseURL: BASE_URL,
   timeout: 25000,
+  withCredentials: true,
 });
 
 /**
@@ -20,20 +19,7 @@ export const apiPublic = axios.create({
 export const api = axios.create({
   baseURL: BASE_URL,
   timeout: 25000,
-});
-
-/* =========================================================
-   REQUEST INTERCEPTOR — inyecta Authorization
-   ========================================================= */
-api.interceptors.request.use((config) => {
-  const access = tokenStorage.getAccess();
-
-  config.headers = config.headers || {};
-  if (access) {
-    config.headers.Authorization = `Bearer ${access}`;
-  }
-
-  return config;
+  withCredentials: true,
 });
 
 /* =========================================================
@@ -70,42 +56,19 @@ api.interceptors.response.use(
       throw error;
     }
 
-    const refresh = tokenStorage.getRefresh();
-    if (!refresh) {
-      tokenStorage.clear?.();
-      throw error;
-    }
-
     original._retry = true;
 
     // 🔁 Un solo refresh concurrente
     if (!refreshingPromise) {
       refreshingPromise = apiPublic
-        .post("/auth/refresh", { refresh })
+        .post("/auth/refresh", {})
         .then((res) => res.data)
-        .catch((err) => {
-          // Refresh inválido → limpiar sesión
-          tokenStorage.clear?.();
-          throw err;
-        })
         .finally(() => {
           refreshingPromise = null;
         });
     }
 
-    const data = await refreshingPromise;
-
-    if (!data?.access) {
-      tokenStorage.clear?.();
-      throw error;
-    }
-
-    // Guardamos tokens nuevos
-    tokenStorage.set(data.access, data.refresh || refresh);
-
-    // Reintentamos request original con nuevo access
-    original.headers = original.headers || {};
-    original.headers.Authorization = `Bearer ${data.access}`;
+    await refreshingPromise;
 
     return api.request(original);
   }

@@ -8,7 +8,7 @@
 - Media/CDN: `MEDIA_URL` apuntando a CDN o `https://tu-dominio/media/`; `MEDIA_ROOT` si usás filesystem; `SERVE_MEDIA_FILES=false` en prod (default) o habilitarlo conscientemente
 - CORS/CSRF: `FRONTEND_ORIGINS` separados por coma; en prod no se habilita `CORS_ALLOW_ALL_ORIGINS`
 - Base de datos: en desarrollo podés usar SQLite local (`backend/db.sqlite3`), pero ese archivo no está versionado y se crea automáticamente. En producción es obligatorio configurar `DB_ENGINE`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST` y `DB_PORT` (o cualquier otro backend que uses) mediante variables de entorno; el backend no arranca con SQLite cuando `DEBUG=False`.
-- Entorno base: copiá `backend/.env.example` hacia `backend/.env` antes de levantar el backend y completá cada valor sensible para el entorno correspondiente.
+- Entorno base: copiá `backend/.env.example` hacia `backend/.env` antes de levantar el backend y completá cada valor sensible para el entorno correspondiente. `docker-compose.yml` usa ese mismo archivo (`backend/.env`) para el servicio.
 - Otros: `API_PAGE_SIZE`, `API_MAX_PAGE_SIZE`, `LOG_LEVEL`
 
 > **Rotación de secretos:** rotar `DJANGO_SECRET_KEY` y cualquier secreto si alguna vez se versionó; genera valores nuevos antes de desplegar o compartir el repositorio y evita reutilizar claves expuestas.
@@ -118,6 +118,8 @@ El botón aparece, el backend responde OK pero el usuario no ve cambios | El `fi
 
 ## Tests con dependencias instaladas
 - Cuando tengás acceso a PyPI, ejecutá `./venv/bin/python -m pip install -r backend/requirements.txt` y luego `./venv/bin/python manage.py test accounts`. Eso hace que `GOOGLE_AUTH_AVAILABLE` sea `True` y los tests que dependen de Google se ejecuten.
+- Para validar métricas en prod: `./venv/bin/python manage.py test common.tests.test_metrics.MetricsEndpointProdTest`.
+- Alternativa rápida: `make test-metrics-prod`.
 ## Media/archivos
 - Producción: serví media desde CDN/bucket o Nginx (location `/media/` apuntando a `MEDIA_ROOT`). Dejá `SERVE_MEDIA_FILES=false` (default) y poné `MEDIA_URL` al endpoint público del CDN.
 - Solo si querés que Django sirva media en prod (no recomendado), definí `SERVE_MEDIA_FILES=true` **y** `ALLOW_SERVE_MEDIA_IN_PROD=true`.
@@ -143,7 +145,8 @@ El botón aparece, el backend responde OK pero el usuario no ve cambios | El `fi
 Tomá `backend/.env.example` como base y completá las variables obligatorias (ver arriba). Además:
 - Base de datos: este proyecto usa SQLite (`backend/db.sqlite3`) por defecto. Si realmente necesitás Postgres, agregá `DB_ENGINE`/`DB_NAME`/... y documentalo, pero las pruebas locales sólo usan el archivo.  
 - JWT: `JWT_SIGNING_KEY` (o usa `DJANGO_SECRET_KEY`) para tokens válidos.
-- Seguridad: `SESSION_COOKIE_SECURE=true`, `CSRF_COOKIE_SECURE=true`, `SECURE_SSL_REDIRECT=true`, `SECURE_HSTS_SECONDS` > 0 en prod.
+- Seguridad: `SESSION_COOKIE_SECURE=true`, `CSRF_COOKIE_SECURE=true`, `SECURE_SSL_REDIRECT=true`, `SECURE_HSTS_SECONDS` alto en prod (por ejemplo `15552000`).
+- Observabilidad: mantener `/metrics` cerrado en producción (no habilitar `ALLOW_METRICS_PUBLIC` salvo que esté protegido por proxy).
 
 ## Frontend endpoint verification
 
@@ -178,7 +181,7 @@ La variante `STRICT=1` falla si el código usa interpolaciones dinámicas (p. ej
 - Cada request recibe (y retorna) la cabecera `X-Request-ID`; el `RequestIDMiddleware` también expone ese valor via `contextvars`, así que cualquier logger puede usarlo con el filtro `common.logging.RequestIDFilter`.
 - `AccessLogMiddleware` genera una línea `INFO` al final de cada request con `request_id`, `method`, `path`, `status_code`, `duration_ms`, `user_id`, `client_ip` y `user_agent`, y en `DEBUG` (`POST/PUT/PATCH/DELETE` JSON) incluye el payload con campos sensibles redacted.
 - Para ajustar qué campos se consideran sensibles podés sobrescribir `REQUEST_LOG_REDACTION_FIELDS` en `.env` (por ejemplo añadiendo `otp` o `secret_key`). En cualquier caso no se loguea `Authorization`, passwords, tokens ni secretos fuera del payload en debug.
-- `django-prometheus` expone un endpoint `/metrics/` con `http_requests_total` y `http_request_duration_seconds` (con etiquetas por método/route/status) y agrega contadores personalizados (`webhooks_*`, `payments_*`) para seguir los webhooks de Mercado Pago y la creación/confirmación/rechazo de pagos.
+- `django-prometheus` expone un endpoint `/metrics/` con `http_requests_total` y `http_request_duration_seconds` (con etiquetas por método/route/status) y agrega contadores personalizados (`webhooks_*`, `payments_*`) para seguir los webhooks de Mercado Pago y la creación/confirmación/rechazo de pagos. En producción solo se publica si `ALLOW_METRICS_PUBLIC=true` (o en `DEBUG`).
 - Protegé `/metrics/` en el proxy que esté delante de Django: en Nginx podés usar una whitelist (`allow 10.0.0.0/8; deny all; proxy_pass http://django:8000/metrics/;`) o autenticación básica (`auth_basic "Metrics"; auth_basic_user_file /etc/nginx/metrics.htpasswd; proxy_pass http://django:8000/metrics/;`). Aplicá esas reglas solo al `location /metrics/`.
 - Para que el backend sólo confíe en `X-Forwarded-For` proveniente de proxies confiables, definí `TRUSTED_PROXY_IPS` o `TRUSTED_PROXY_NETWORKS` en `.env` (por ejemplo `TRUSTED_PROXY_IPS=127.0.0.1,10.0.0.1` o `TRUSTED_PROXY_NETWORKS=10.0.0.0/8`). Nginx puede agregar `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` y proxear hacia Django mientras que otros clientes no pueden falsificar el origen porque el middleware ignora el header si `REMOTE_ADDR` no pertenece a la lista confiable.
 - Además, la nueva app `audit` persiste un `AuditLog` por cada cambio crítico (política, pago, webhook, acciones admin) con `request_id`, actor_ID, IP y datos before/after saneados. Si necesitás permitir campos adicionales podés configurar `AUDIT_LOG_SENSITIVE_KEYWORDS` en `.env` (por defecto elimina `password`, `token`, `secret`, etc.).

@@ -1,6 +1,5 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { authApi } from "@/api/authApi";
-import { tokenStorage } from "@/api/tokenStorage";
 
 const initialState = {
   user: null,
@@ -29,11 +28,8 @@ export const login = createAsyncThunk(
         return { require_otp: true };
       }
 
-      // 200 => tokens
-      if (data?.access) {
-        tokenStorage.set(data.access, data.refresh);
-        await dispatch(loadMe());
-      }
+      // 200 => sesión OK (cookies)
+      await dispatch(loadMe());
 
       return data;
     } catch (e) {
@@ -47,10 +43,7 @@ export const googleLogin = createAsyncThunk(
   async ({ idToken }, { dispatch, rejectWithValue }) => {
     try {
       const data = await authApi.googleLogin({ idToken });
-      if (data?.access) {
-        tokenStorage.set(data.access, data.refresh);
-        await dispatch(loadMe());
-      }
+      await dispatch(loadMe());
       return data;
     } catch (e) {
       return rejectWithValue(authApi.normalizeError(e));
@@ -69,11 +62,8 @@ export const register = createAsyncThunk("auth/register", async (payload, { reje
 export const logout = createAsyncThunk("auth/logout", async (_, { rejectWithValue }) => {
   try {
     await authApi.logout();
-    tokenStorage.clear?.();
     return true;
   } catch (e) {
-    // igual limpiamos en cliente
-    tokenStorage.clear?.();
     return rejectWithValue(authApi.normalizeError(e));
   }
 });

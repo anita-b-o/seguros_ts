@@ -1,7 +1,11 @@
+import os
 from datetime import date, timedelta
 from decimal import Decimal
+from importlib import reload
 from unittest import mock
 
+from django.test import override_settings
+from django.urls import clear_url_caches
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
@@ -22,9 +26,62 @@ User = get_user_model()
 
 class MetricsEndpointTest(APITestCase):
     def test_metrics_endpoint_responds(self):
-        res = self.client.get("/metrics/")
-        self.assertEqual(res.status_code, 200)
-        self.assertIn(b"# HELP", res.content)
+        original = os.environ.get("ALLOW_METRICS_PUBLIC")
+        os.environ["ALLOW_METRICS_PUBLIC"] = "true"
+        try:
+            clear_url_caches()
+            import seguros.urls as urls
+            reload(urls)
+            res = self.client.get("/metrics/")
+            self.assertEqual(res.status_code, 200)
+            self.assertIn(b"# HELP", res.content)
+        finally:
+            if original is None:
+                os.environ.pop("ALLOW_METRICS_PUBLIC", None)
+            else:
+                os.environ["ALLOW_METRICS_PUBLIC"] = original
+            clear_url_caches()
+            reload(urls)
+
+
+class MetricsEndpointProdTest(APITestCase):
+    @override_settings(DEBUG=False)
+    def test_metrics_endpoint_hidden_in_production(self):
+        original = os.environ.get("ALLOW_METRICS_PUBLIC")
+        if "ALLOW_METRICS_PUBLIC" in os.environ:
+            del os.environ["ALLOW_METRICS_PUBLIC"]
+        try:
+            clear_url_caches()
+            import seguros.urls as urls
+            reload(urls)
+            res = self.client.get("/metrics/")
+            self.assertEqual(res.status_code, 404)
+        finally:
+            if original is None:
+                os.environ.pop("ALLOW_METRICS_PUBLIC", None)
+            else:
+                os.environ["ALLOW_METRICS_PUBLIC"] = original
+            clear_url_caches()
+            reload(urls)
+
+    @override_settings(DEBUG=False)
+    def test_metrics_endpoint_visible_when_enabled(self):
+        original = os.environ.get("ALLOW_METRICS_PUBLIC")
+        os.environ["ALLOW_METRICS_PUBLIC"] = "true"
+        try:
+            clear_url_caches()
+            import seguros.urls as urls
+            reload(urls)
+            res = self.client.get("/metrics/")
+            self.assertEqual(res.status_code, 200)
+            self.assertIn(b"# HELP", res.content)
+        finally:
+            if original is None:
+                os.environ.pop("ALLOW_METRICS_PUBLIC", None)
+            else:
+                os.environ["ALLOW_METRICS_PUBLIC"] = original
+            clear_url_caches()
+            reload(urls)
 
 
 class WebhookMetricsTest(APITestCase):

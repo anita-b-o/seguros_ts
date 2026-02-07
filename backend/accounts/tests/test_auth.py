@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from django.urls import reverse
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
@@ -36,9 +37,9 @@ class AuthTests(APITestCase):
         url = reverse("auth-login")
         res = self.client.post(url, {"email": self.user.email, "password": self.password})
         self.assertEqual(res.status_code, 200)
-        self.assertIn("access", res.data)
-        self.assertIn("refresh", res.data)
         self.assertEqual(res.data["user"]["email"], self.user.email)
+        self.assertIn(settings.JWT_ACCESS_COOKIE, res.cookies)
+        self.assertIn(settings.JWT_REFRESH_COOKIE, res.cookies)
 
     def test_login_inactive_user_blocked(self):
         url = reverse("auth-login")
@@ -133,9 +134,9 @@ class AuthTests(APITestCase):
                 mock_verify.return_value = base_payload
                 res = self.client.post(url, {"id_token": "ok"})
         self.assertEqual(res.status_code, 200)
-        self.assertIn("access", res.data)
-        self.assertIn("refresh", res.data)
         self.assertEqual(res.data["user"]["email"], base_payload["email"])
+        self.assertIn(settings.JWT_ACCESS_COOKIE, res.cookies)
+        self.assertIn(settings.JWT_REFRESH_COOKIE, res.cookies)
 
         user = User.objects.get(email=base_payload["email"])
         self.assertEqual(user.dni, "ggoogle-sub-123")
@@ -197,26 +198,26 @@ class TokenRotationLogoutTests(APITestCase):
         url = reverse("auth-login")
         res = self.client.post(url, {"email": self.user.email, "password": self.password})
         self.assertEqual(res.status_code, 200)
-        return res.data
+        return res.cookies
 
     def test_refresh_rotation_blacklists_old_token(self):
-        tokens = self._get_tokens()
-        old_refresh = tokens["refresh"]
+        cookies = self._get_tokens()
+        old_refresh = cookies[settings.JWT_REFRESH_COOKIE].value
         refresh_url = reverse("auth-refresh")
 
         res = self.client.post(refresh_url, {"refresh": old_refresh})
         self.assertEqual(res.status_code, 200)
-        new_refresh = res.data["refresh"]
+        new_refresh = res.cookies[settings.JWT_REFRESH_COOKIE].value
         self.assertNotEqual(old_refresh, new_refresh)
 
         retry = self.client.post(refresh_url, {"refresh": old_refresh})
         self.assertEqual(retry.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_logout_blacklists_refresh(self):
-        tokens = self._get_tokens()
+        cookies = self._get_tokens()
         refresh_url = reverse("auth-refresh")
-        refresh_token = tokens["refresh"]
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        refresh_token = cookies[settings.JWT_REFRESH_COOKIE].value
+        self.client.cookies[settings.JWT_ACCESS_COOKIE] = cookies[settings.JWT_ACCESS_COOKIE].value
 
         logout_url = reverse("auth-logout")
         res = self.client.post(logout_url, {"refresh": refresh_token})

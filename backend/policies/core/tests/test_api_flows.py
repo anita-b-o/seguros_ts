@@ -1,4 +1,5 @@
 from datetime import timedelta
+from django.conf import settings
 from decimal import Decimal
 
 from django.utils import timezone
@@ -75,14 +76,16 @@ class ApiFlowsTest(APITestCase):
             },
         )
         self.assertEqual(res.status_code, 201)
-        self.assertIn("access", res.data)
+        self.assertIn(settings.JWT_ACCESS_COOKIE, res.cookies)
+        self.assertIn(settings.JWT_REFRESH_COOKIE, res.cookies)
         # Login usuario existente
         res2 = self.client.post(
             "/api/auth/login",
             {"email": self.user.email, "password": "pass1234"},
         )
         self.assertEqual(res2.status_code, 200)
-        self.assertIn("access", res2.data)
+        self.assertIn(settings.JWT_ACCESS_COOKIE, res2.cookies)
+        self.assertIn(settings.JWT_REFRESH_COOKIE, res2.cookies)
 
     def test_quote_only_active_products(self):
         # Producto inactivo que no debe aparecer

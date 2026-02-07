@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import useAuth from "@/hooks/useAuth";
@@ -166,6 +166,10 @@ export default function AdminPoliciesPage() {
   const [errorDeleted, setErrorDeleted] = useState("");
   const [confirm, setConfirm] = useState({ open: false, mode: "", policy: null });
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [queryInput, setQueryInput] = useState(q);
+  const searchTimer = useRef(null);
+  const deletedSearchTimer = useRef(null);
+  const deletedRequestId = useRef(0);
 
   // --- Stats (tarjetas) ---
   const [stats, setStats] = useState(null);
@@ -193,6 +197,9 @@ export default function AdminPoliciesPage() {
     dispatch(clearAdminPoliciesErrors());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    setQueryInput(q);
+  }, [q]);
 
   // ✅ Cargar stats al montar
   const fetchStats = async () => {
@@ -219,18 +226,22 @@ export default function AdminPoliciesPage() {
   const metrics = useMemo(() => groupCounts(list), [list]); // eslint-disable-line no-unused-vars
 
   const fetchDeleted = async ({ page: p = deletedPage, search = deletedQuery } = {}) => {
+    const requestId = ++deletedRequestId.current;
     setLoadingDeleted(true);
     setErrorDeleted("");
     try {
       const data = await adminPoliciesApi.listDeleted({ page: p, page_size: 5, search });
+      if (deletedRequestId.current !== requestId) return;
       setDeletedList(Array.isArray(data?.results) ? data.results : []);
       setDeletedCount(Number(data?.count || 0));
       setDeletedPage(p);
     } catch (e) {
+      if (deletedRequestId.current !== requestId) return;
       setDeletedList([]);
       setDeletedCount(0);
       setErrorDeleted("No se pudieron cargar las pólizas eliminadas.");
     } finally {
+      if (deletedRequestId.current !== requestId) return;
       setLoadingDeleted(false);
     }
   };
@@ -295,6 +306,20 @@ export default function AdminPoliciesPage() {
     if (!policy?.id) return;
     setConfirm({ open: true, mode: "delete", policy });
   };
+
+  useEffect(() => {
+    return () => {
+      if (searchTimer.current) {
+        clearTimeout(searchTimer.current);
+        searchTimer.current = null;
+      }
+      if (deletedSearchTimer.current) {
+        clearTimeout(deletedSearchTimer.current);
+        deletedSearchTimer.current = null;
+      }
+      deletedRequestId.current += 1;
+    };
+  }, []);
 
   const closeConfirm = (force = false) => {
     if (confirmBusy && !force) return;
@@ -607,8 +632,18 @@ export default function AdminPoliciesPage() {
         <div style={{ padding: 14, display: "flex", gap: 10 }}>
           <input
             className="form-input"
-            value={q}
-            onChange={(e) => dispatch(setAdminPoliciesQuery(e.target.value))}
+            value={queryInput}
+            onChange={(e) => {
+              const next = e.target.value;
+              setQueryInput(next);
+              if (searchTimer.current) {
+                clearTimeout(searchTimer.current);
+              }
+              searchTimer.current = setTimeout(() => {
+                searchTimer.current = null;
+                dispatch(setAdminPoliciesQuery(next));
+              }, 300);
+            }}
             placeholder="Buscar por número o patente…"
             disabled={!isAdmin}
           />
@@ -669,7 +704,13 @@ export default function AdminPoliciesPage() {
                   const next = e.target.value;
                   setDeletedQuery(next);
                   setDeletedPage(1);
-                  void fetchDeleted({ page: 1, search: next });
+                  if (deletedSearchTimer.current) {
+                    clearTimeout(deletedSearchTimer.current);
+                  }
+                  deletedSearchTimer.current = setTimeout(() => {
+                    deletedSearchTimer.current = null;
+                    void fetchDeleted({ page: 1, search: next });
+                  }, 300);
                 }}
                 placeholder="Buscar eliminadas por número o patente…"
                 disabled={!isAdmin}

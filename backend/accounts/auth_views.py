@@ -29,7 +29,7 @@ from accounts.utils.otp import (
 )
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from .serializers import UserSerializer
 from django.urls import reverse
 from django.utils.crypto import get_random_string
@@ -76,6 +76,41 @@ def _normalize_rate_identifier(value: str) -> str:
     normalized = (value or "").strip()
     normalized = re.sub(r"[^a-zA-Z0-9@._:=|-]", "_", normalized)
     return normalized or "unknown"
+
+
+def _jwt_cookie_settings():
+    return {
+        "httponly": True,
+        "secure": getattr(settings, "JWT_COOKIE_SECURE", not settings.DEBUG),
+        "samesite": getattr(settings, "JWT_COOKIE_SAMESITE", "Lax"),
+        "domain": getattr(settings, "JWT_COOKIE_DOMAIN", None),
+        "path": getattr(settings, "JWT_COOKIE_PATH", "/"),
+    }
+
+
+def _set_auth_cookies(response, access: str, refresh: str):
+    access_max_age = int(settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds())
+    refresh_max_age = int(settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds())
+    cfg = _jwt_cookie_settings()
+
+    response.set_cookie(
+        settings.JWT_ACCESS_COOKIE,
+        access,
+        max_age=access_max_age,
+        **cfg,
+    )
+    response.set_cookie(
+        settings.JWT_REFRESH_COOKIE,
+        refresh,
+        max_age=refresh_max_age,
+        **cfg,
+    )
+
+
+def _clear_auth_cookies(response):
+    cfg = _jwt_cookie_settings()
+    response.delete_cookie(settings.JWT_ACCESS_COOKIE, path=cfg["path"], domain=cfg["domain"])
+    response.delete_cookie(settings.JWT_REFRESH_COOKIE, path=cfg["path"], domain=cfg["domain"])
 
 
 class CacheUnavailable(Exception):
@@ -334,11 +369,11 @@ def _increment_rate_counter(rate_key, cooldown):
 class EmailLoginView(PublicEndpointMixin, APIView):
     """
     Endpoint de login compatible con el frontend mock (/auth/login).
-    Permite iniciar sesión por email (o DNI como fallback) y devuelve access/refresh + datos de usuario.
+    Permite iniciar sesión por email (o DNI como fallback), setea cookies HttpOnly y devuelve datos del usuario.
     """
     permission_classes = [AllowAny]
     throttle_scope = "login"
-    # Este POST expone un write público controlado (solo devuelve tokens).
+    # Este POST expone un write público controlado (solo setea cookies + devuelve user).
     public_write_allowed = True
 
     def post(self, request):
@@ -450,12 +485,15 @@ class EmailLoginView(PublicEndpointMixin, APIView):
                 return _cache_unavailable_response()
 
         refresh = RefreshToken.for_user(user)
+        access = str(refresh.access_token)
+        refresh_token = str(refresh)
+
         data = {
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
             "user": UserSerializer(user).data,
         }
-        return Response(data)
+        res = Response(data)
+        _set_auth_cookies(res, access, refresh_token)
+        return res
 
 
 class PasswordResetRequestView(PublicEndpointMixin, views.APIView):
@@ -543,7 +581,7 @@ class PasswordResetConfirmView(PublicEndpointMixin, views.APIView):
 class RegisterView(PublicEndpointMixin, APIView):
     """
     Registro público de usuarios.
-    Devuelve access/refresh + datos del usuario.
+    Setea cookies HttpOnly y devuelve datos del usuario.
     """
 
     permission_classes = [AllowAny]
@@ -590,14 +628,11 @@ class RegisterView(PublicEndpointMixin, APIView):
         )
 
         refresh = RefreshToken.for_user(user)
-        return Response(
-            {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user": UserSerializer(user).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        access = str(refresh.access_token)
+        refresh_token = str(refresh)
+        res = Response({"user": UserSerializer(user).data}, status=status.HTTP_201_CREATED)
+        _set_auth_cookies(res, access, refresh_token)
+        return res
 
 
 class LogoutView(APIView):
@@ -605,36 +640,62 @@ class LogoutView(APIView):
     Endpoint de logout para el front que invalida el refresh token (si se envía).
     Requiere el token para poder marcarlo en la blacklist.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request):
         refresh_token = (
             request.data.get("refresh")
             or request.data.get("refresh_token")
+            or request.COOKIES.get(settings.JWT_REFRESH_COOKIE)
         )
+
+        res = Response(
+            {"detail": "Sesión cerrada."},
+            status=status.HTTP_205_RESET_CONTENT,
+        )
+        _clear_auth_cookies(res)
+
         if not refresh_token:
-            return Response(
-                {"detail": "El refresh token es requerido para cerrar sesión."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return res
 
         try:
             RefreshToken(refresh_token).blacklist()
         except TokenError:
-            return Response(
-                {"detail": "Refresh token inválido o expirado."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            res.status_code = status.HTTP_400_BAD_REQUEST
+            res.data = {"detail": "Refresh token inválido o expirado."}
+        return res
 
-        return Response(
-            {"detail": "Sesión cerrada."},
-            status=status.HTTP_205_RESET_CONTENT,
-        )
+
+class CookieTokenRefreshView(PublicEndpointMixin, APIView):
+    """
+    Refresh JWT usando cookie HttpOnly (o body si se envía).
+    Devuelve 200 y rota cookies; no expone tokens en el body.
+    """
+    permission_classes = [AllowAny]
+    public_write_allowed = True
+
+    def post(self, request):
+        refresh_token = request.data.get("refresh") or request.COOKIES.get(settings.JWT_REFRESH_COOKIE)
+        if not refresh_token:
+            return Response({"detail": "Refresh token requerido."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        serializer = TokenRefreshSerializer(data={"refresh": refresh_token})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except TokenError:
+            return Response({"detail": "Refresh token inválido o expirado."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        access = serializer.validated_data.get("access")
+        new_refresh = serializer.validated_data.get("refresh") or refresh_token
+
+        res = Response({"detail": "Token refrescado."}, status=status.HTTP_200_OK)
+        _set_auth_cookies(res, access, new_refresh)
+        return res
 
 
 class GoogleLoginView(PublicEndpointMixin, APIView):
     """
-    Endpoint que valida un id_token de Google, sincroniza o crea el usuario y retorna los tokens JWT.
+    Endpoint que valida un id_token de Google, sincroniza o crea el usuario y setea cookies JWT.
     Solo está disponible si ENABLE_GOOGLE_LOGIN está habilitado.
     """
     permission_classes = [AllowAny]
@@ -732,14 +793,11 @@ class GoogleLoginView(PublicEndpointMixin, APIView):
                 user.save(update_fields=updates)
 
         refresh = RefreshToken.for_user(user)
-        return Response(
-            {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user": UserSerializer(user).data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        access = str(refresh.access_token)
+        refresh_token = str(refresh)
+        res = Response({"user": UserSerializer(user).data}, status=status.HTTP_200_OK)
+        _set_auth_cookies(res, access, refresh_token)
+        return res
 
 
 class GoogleLoginStatusView(PublicEndpointMixin, APIView):

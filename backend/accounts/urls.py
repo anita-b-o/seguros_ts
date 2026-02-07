@@ -10,7 +10,6 @@ class PublicTokenObtainPairView(TokenObtainPairView):
     """JWT login endpoint. Must be accessible without prior authentication."""
     permission_classes = (AllowAny,)
 
-
 class PublicTokenRefreshView(TokenRefreshView):
     """JWT refresh endpoint. Must be accessible without prior authentication."""
     permission_classes = (AllowAny,)

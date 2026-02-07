@@ -5,7 +5,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file:
-      - .env
+      - backend/.env
     environment:
       REDIS_URL: redis://redis:6379/1
     ports:

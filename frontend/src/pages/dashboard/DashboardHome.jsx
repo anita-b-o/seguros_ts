@@ -1,10 +1,14 @@
 // frontend/src/pages/dashboard/DashboardHome.jsx
 
 import { useEffect, useMemo, useState } from "react";
+import { useDispatch } from "react-redux";
 import useAuth from "@/hooks/useAuth";
 import { policiesApi } from "@/services/policiesApi";
 import { paymentsApi } from "@/services/paymentsApi";
+import { openReceiptModal } from "@/features/receipts/receiptsSlice";
+import ReceiptModal from "@/components/receipts/ReceiptModal";
 import "@/styles/dashboard.css";
+import "@/styles/receipts.css";
 
 function fmtMoney(v) {
   const n = Number(v);
@@ -59,6 +63,7 @@ function normalizeDashboardResponse(payload) {
 
 export default function DashboardHome() {
   const { user } = useAuth();
+  const dispatch = useDispatch();
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -71,6 +76,8 @@ export default function DashboardHome() {
   const [timeline, setTimeline] = useState(null);
   const [payBusy, setPayBusy] = useState(false);
   const [payErr, setPayErr] = useState("");
+  const [receiptBusy, setReceiptBusy] = useState(false);
+  const [receiptErr, setReceiptErr] = useState("");
 
   async function loadDashboard(policyId = "") {
     setLoading(true);
@@ -307,6 +314,39 @@ export default function DashboardHome() {
     }
   };
 
+  const onViewReceipt = async () => {
+    if (!policyView?.id || receiptBusy) return;
+    setReceiptBusy(true);
+    setReceiptErr("");
+
+    try {
+      const data = await policiesApi.listReceipts(policyView.id, { page: 1, pageSize: 1 });
+      const results = Array.isArray(data?.results)
+        ? data.results
+        : Array.isArray(data)
+          ? data
+          : [];
+      const receipt = results[0] || null;
+      if (!receipt) {
+        setReceiptErr("No hay comprobantes para esta póliza.");
+        return;
+      }
+
+      const policyForReceipt =
+        selected ||
+        policies.find((p) => String(p?.id) === String(policyView.id)) || {
+          id: policyView.id,
+          number: policyView.number,
+        };
+
+      dispatch(openReceiptModal({ policy: policyForReceipt, receipt }));
+    } catch (e) {
+      setReceiptErr("No se pudo cargar el comprobante.");
+    } finally {
+      setReceiptBusy(false);
+    }
+  };
+
   return (
     <div className="dash-page">
       <div className="dash-head">
@@ -420,9 +460,10 @@ export default function DashboardHome() {
                       <button
                         className="btn-secondary"
                         type="button"
-                        onClick={() => alert("Luego abrimos detalle del período / factura.")}
+                        onClick={onViewReceipt}
+                        disabled={receiptBusy}
                       >
-                        Ver detalle
+                        {receiptBusy ? "Cargando…" : "Ver comprobante"}
                       </button>
                     </div>
                   </>
@@ -473,15 +514,17 @@ export default function DashboardHome() {
                       <button
                         className="btn-secondary"
                         type="button"
-                        onClick={() => alert("Luego abrimos detalle del período / factura.")}
+                        onClick={onViewReceipt}
+                        disabled={receiptBusy}
                       >
-                        Ver detalle
+                        {receiptBusy ? "Cargando…" : "Ver comprobante"}
                       </button>
                     </div>
                   </>
                 )}
 
                 {payErr ? <div className="dash-hint">{payErr}</div> : null}
+                {receiptErr ? <div className="dash-hint">{receiptErr}</div> : null}
               </div>
             ) : (
               <div className="dash-muted">No tenés facturas pendientes en este momento.</div>
@@ -489,6 +532,7 @@ export default function DashboardHome() {
           </section>
         </>
       )}
+      <ReceiptModal />
     </div>
   );
 }

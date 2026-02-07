@@ -1,5 +1,5 @@
 // src/pages/admin/users/AdminUsersPage.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 import useAuth from "@/hooks/useAuth";
@@ -35,6 +35,10 @@ export default function AdminUsersPage() {
   const [errorDeleted, setErrorDeleted] = useState("");
   const [confirm, setConfirm] = useState({ open: false, mode: "", userRow: null });
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [queryInput, setQueryInput] = useState(q);
+  const searchTimer = useRef(null);
+  const deletedSearchTimer = useRef(null);
+  const deletedRequestId = useRef(0);
 
   const totalPages = useMemo(() => {
     const size = Number(pageSize || 10);
@@ -59,6 +63,9 @@ export default function AdminUsersPage() {
     dispatch(clearAdminUsersErrors());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    setQueryInput(q);
+  }, [q]);
 
   const onRefresh = () => {
     dispatch(clearAdminUsersErrors());
@@ -72,18 +79,22 @@ export default function AdminUsersPage() {
   const onManagePolicies = (u) => setSelectedUser(u);
 
   const fetchDeleted = async ({ page: p = deletedPage, q = deletedQuery } = {}) => {
+    const requestId = ++deletedRequestId.current;
     setLoadingDeleted(true);
     setErrorDeleted("");
     try {
       const data = await adminUsersApi.listDeleted({ page: p, page_size: 5, q });
+      if (deletedRequestId.current !== requestId) return;
       setDeletedList(Array.isArray(data?.results) ? data.results : []);
       setDeletedCount(Number(data?.count || 0));
       setDeletedPage(p);
     } catch (e) {
+      if (deletedRequestId.current !== requestId) return;
       setDeletedList([]);
       setDeletedCount(0);
       setErrorDeleted("No se pudieron cargar los usuarios eliminados.");
     } finally {
+      if (deletedRequestId.current !== requestId) return;
       setLoadingDeleted(false);
     }
   };
@@ -136,6 +147,20 @@ export default function AdminUsersPage() {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (searchTimer.current) {
+        clearTimeout(searchTimer.current);
+        searchTimer.current = null;
+      }
+      if (deletedSearchTimer.current) {
+        clearTimeout(deletedSearchTimer.current);
+        deletedSearchTimer.current = null;
+      }
+      deletedRequestId.current += 1;
+    };
+  }, []);
+
   return (
     <div className="admin-page">
       <div className="admin-header">
@@ -171,8 +196,18 @@ export default function AdminUsersPage() {
         <div style={{ padding: 14, display: "flex", gap: 10 }}>
           <input
             className="form-input"
-            value={q}
-            onChange={(e) => dispatch(setAdminUsersQuery(e.target.value))}
+            value={queryInput}
+            onChange={(e) => {
+              const next = e.target.value;
+              setQueryInput(next);
+              if (searchTimer.current) {
+                clearTimeout(searchTimer.current);
+              }
+              searchTimer.current = setTimeout(() => {
+                searchTimer.current = null;
+                dispatch(setAdminUsersQuery(next));
+              }, 300);
+            }}
             placeholder="Buscar por nombre, email o DNI…"
             disabled={!isAdmin}
           />
@@ -239,7 +274,13 @@ export default function AdminUsersPage() {
                   const next = e.target.value;
                   setDeletedQuery(next);
                   setDeletedPage(1);
-                  void fetchDeleted({ page: 1, q: next });
+                  if (deletedSearchTimer.current) {
+                    clearTimeout(deletedSearchTimer.current);
+                  }
+                  deletedSearchTimer.current = setTimeout(() => {
+                    deletedSearchTimer.current = null;
+                    void fetchDeleted({ page: 1, q: next });
+                  }, 300);
                 }}
                 placeholder="Buscar eliminados por nombre, email o DNI…"
                 disabled={!isAdmin}

@@ -19,9 +19,9 @@ from accounts.auth_views import (
     GoogleLoginView,
     GoogleLoginStatusView,
     ResendOnboardingView,
+    CookieTokenRefreshView,
 )
 from accounts.views import deprecated_lookup, AdminUserViewSet
-from accounts.urls import PublicTokenRefreshView
 from .legacy_views import legacy_announcements_list, legacy_announcements_detail
 from common.views import AppSettingsView
 
@@ -35,12 +35,10 @@ def healthcheck(request):
     return JsonResponse({"status": "ok"}, status=200)
 
 
-def _env_bool(val):
-    return (
-        str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
-        if val is not None
-        else False
-    )
+def _env_bool(val, default=False):
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 
 def _admin_redirect(request):
@@ -62,10 +60,6 @@ def _redirect_to(path_with_slash: str):
 
 
 urlpatterns = [
-    # Prometheus
-    path("metrics/", exports.ExportToDjangoView, name="prometheus-metrics-slash"),
-    path("metrics", exports.ExportToDjangoView, name="prometheus-metrics"),
-
     # Django admin — configurable por .env
     path(settings.ADMIN_URL, admin.site.urls),
 
@@ -103,8 +97,8 @@ urlpatterns = [
     path("api/auth/login", EmailLoginView.as_view(), name="auth-login"),
     path("api/auth/login/", EmailLoginView.as_view(), name="auth-login-slash"),
 
-    path("api/auth/refresh", PublicTokenRefreshView.as_view(), name="auth-refresh"),
-    path("api/auth/refresh/", PublicTokenRefreshView.as_view(), name="auth-refresh-slash"),
+    path("api/auth/refresh", CookieTokenRefreshView.as_view(), name="auth-refresh"),
+    path("api/auth/refresh/", CookieTokenRefreshView.as_view(), name="auth-refresh-slash"),
 
     path("api/auth/logout", LogoutView.as_view(), name="auth-logout"),
     path("api/auth/logout/", LogoutView.as_view(), name="auth-logout-slash"),
@@ -186,6 +180,13 @@ urlpatterns = [
     path("api/admin/settings", AppSettingsView.as_view(), name="admin-settings"),
     path("api/admin/settings/", AppSettingsView.as_view(), name="admin-settings-slash"),
 ]
+
+# Prometheus (solo si se habilita explícitamente o en DEBUG)
+if settings.DEBUG or _env_bool(os.getenv("ALLOW_METRICS_PUBLIC"), False):
+    urlpatterns = [
+        path("metrics/", exports.ExportToDjangoView, name="prometheus-metrics-slash"),
+        path("metrics", exports.ExportToDjangoView, name="prometheus-metrics"),
+    ] + urlpatterns
 
 
 # === Archivos estáticos y media ===

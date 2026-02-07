@@ -1,15 +1,11 @@
 // src/pages/admin/products/Products.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useAuth from "@/hooks/useAuth";
 import { adminProductsApi } from "@/services/adminProductsApi";
 import "@/styles/adminPolicies.css";
 
 import ProductsTable from "./ProductsTable";
 import ProductFormModal from "./ProductFormModal";
-
-function fmtBool(v) {
-  return v ? "Sí" : "No";
-}
 
 export default function AdminProductsPage() {
   const { user } = useAuth();
@@ -38,26 +34,35 @@ export default function AdminProductsPage() {
   const [errorDeleted, setErrorDeleted] = useState("");
   const [confirm, setConfirm] = useState({ open: false, mode: "", item: null });
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const searchTimer = useRef(null);
+  const requestIdRef = useRef(0);
+  const deletedRequestIdRef = useRef(0);
 
   const load = async ({ p = page, query = q } = {}) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setErr("");
     try {
       const data = await adminProductsApi.list({ page: p, page_size: pageSize, q: query });
+      if (requestIdRef.current !== requestId) return;
       const items = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
       setList(items);
       setCount(Number(data?.count ?? items.length ?? 0));
       setPage(p);
     } catch (e) {
+      if (requestIdRef.current !== requestId) return;
       setList([]);
       setCount(0);
       setErr("No se pudieron cargar los productos (tipos de seguro).");
     } finally {
+      if (requestIdRef.current !== requestId) return;
       setLoading(false);
     }
   };
 
   const fetchDeleted = async ({ page: p = deletedPage, search = deletedQuery } = {}) => {
+    if (!isAdmin) return;
+    const requestId = ++deletedRequestIdRef.current;
     setLoadingDeleted(true);
     setErrorDeleted("");
     try {
@@ -66,20 +71,24 @@ export default function AdminProductsPage() {
         page_size: 5,
         q: search,
       });
+      if (deletedRequestIdRef.current !== requestId) return;
       const items = Array.isArray(data?.results) ? data.results : [];
       setDeletedList(items);
       setDeletedCount(Number(data?.count || 0));
       setDeletedPage(p);
     } catch (e) {
+      if (deletedRequestIdRef.current !== requestId) return;
       setDeletedList([]);
       setDeletedCount(0);
       setErrorDeleted("No se pudieron cargar los productos eliminados.");
     } finally {
+      if (deletedRequestIdRef.current !== requestId) return;
       setLoadingDeleted(false);
     }
   };
 
   const onToggleDeleted = async () => {
+    if (!isAdmin) return;
     const nextShow = !showDeleted;
     setShowDeleted(nextShow);
     if (nextShow) {
@@ -92,6 +101,14 @@ export default function AdminProductsPage() {
     if (!isAdmin) return;
     void load({ p: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      if (searchTimer.current) {
+        clearTimeout(searchTimer.current);
+        searchTimer.current = null;
+      }
+      requestIdRef.current += 1;
+      deletedRequestIdRef.current += 1;
+    };
   }, [isAdmin]);
 
   const onRefresh = () => void load({ p: 1 });
@@ -99,7 +116,13 @@ export default function AdminProductsPage() {
   const onQueryChange = (e) => {
     const next = e.target.value;
     setQ(next);
-    void load({ p: 1, query: next });
+    if (searchTimer.current) {
+      clearTimeout(searchTimer.current);
+    }
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null;
+      void load({ p: 1, query: next });
+    }, 300);
   };
 
   const onEdit = async (row) => {
@@ -182,15 +205,15 @@ export default function AdminProductsPage() {
             {loading ? "Actualizando…" : "Actualizar"}
           </button>
 
-          <button
-            className="btn-primary"
-            type="button"
-            onClick={() => setOpenCreate(true)}
-            disabled={!isAdmin}
-            title={!isAdmin ? "Necesitás permisos de administrador." : ""}
-          >
-            + Crear seguro
-          </button>
+          {isAdmin ? (
+            <button
+              className="btn-primary"
+              type="button"
+              onClick={() => setOpenCreate(true)}
+            >
+              + Crear seguro
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -262,8 +285,15 @@ export default function AdminProductsPage() {
         onSaved={() => load({ p: Math.max(1, page) })}
       />
 
-      <div style={{ marginTop: 14 }}>
-        <button className="btn-secondary" type="button" onClick={onToggleDeleted} disabled={loading}>
+      {isAdmin ? (
+        <div style={{ marginTop: 14 }}>
+        <button
+          className="btn-secondary"
+          type="button"
+          onClick={onToggleDeleted}
+          disabled={loading || !isAdmin}
+          title={!isAdmin ? "Necesitás permisos de administrador." : ""}
+        >
           {showDeleted ? "Ocultar eliminados" : "Ver eliminados"}
           {deletedCount ? ` (${deletedCount})` : ""}
         </button>
@@ -377,6 +407,7 @@ export default function AdminProductsPage() {
           </div>
         ) : null}
       </div>
+      ) : null}
 
       {confirm.open ? (
         <div

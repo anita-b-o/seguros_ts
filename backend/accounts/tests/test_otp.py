@@ -3,6 +3,7 @@ from unittest.mock import patch
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.urls import reverse
+from django.conf import settings
 from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -94,7 +95,8 @@ class OTPTests(APITestCase):
                 {"email": self.staff.email, "password": self.password, "otp": "111111"},
             )
         self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
-        self.assertIn("access", verify_response.data)
+        self.assertIn(settings.JWT_ACCESS_COOKIE, verify_response.cookies)
+        self.assertIn(settings.JWT_REFRESH_COOKIE, verify_response.cookies)
 
     @override_settings(
         OTP_PEPPER="test-pepper",

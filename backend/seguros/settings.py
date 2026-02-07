@@ -362,6 +362,15 @@ SIMPLE_JWT = {
     "TOKEN_OBTAIN_SERIALIZER": "accounts.jwt_serializers.EmailTokenObtainPairSerializer",
 }
 
+# === JWT COOKIES ===
+# Defaults aligned with previous localStorage keys.
+JWT_ACCESS_COOKIE = os.getenv("JWT_ACCESS_COOKIE", "sc_access")
+JWT_REFRESH_COOKIE = os.getenv("JWT_REFRESH_COOKIE", "sc_refresh")
+JWT_COOKIE_SECURE = _bool(os.getenv("JWT_COOKIE_SECURE"), not DEBUG)
+JWT_COOKIE_SAMESITE = os.getenv("JWT_COOKIE_SAMESITE", "Lax")
+JWT_COOKIE_DOMAIN = os.getenv("JWT_COOKIE_DOMAIN") or None
+JWT_COOKIE_PATH = os.getenv("JWT_COOKIE_PATH", "/")
+
 
 # === INTERNACIONALIZACIÓN ===
 LANGUAGE_CODE = "es-ar"

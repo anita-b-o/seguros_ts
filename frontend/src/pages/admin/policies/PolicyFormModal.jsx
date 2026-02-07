@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { adminPoliciesApi } from "@/services/adminPoliciesApi";
 import { quotesApi } from "@/services/quotesApi";
@@ -28,6 +28,25 @@ function safeStr(v) {
   return v == null ? "" : String(v);
 }
 
+function normalizeAmountInput(raw) {
+  const value = safeStr(raw).trim();
+  if (!value) return null;
+  const cleaned = value.replace(/\s/g, "");
+  const hasComma = cleaned.includes(",");
+  const hasDot = cleaned.includes(".");
+  let normalized = cleaned;
+  if (hasComma && hasDot) {
+    normalized = cleaned.replace(/\./g, "").replace(/,/g, ".");
+  } else if (hasComma) {
+    normalized = cleaned.replace(/,/g, ".");
+  }
+  normalized = normalized.replace(/[^0-9.-]/g, "");
+  if (!normalized || normalized === "-" || normalized === "." || normalized === "-.") return null;
+  const num = Number(normalized);
+  if (!Number.isFinite(num)) return null;
+  return { normalized, number: num };
+}
+
 function pickFirst(obj, keys) {
   if (!obj) return null;
   for (const k of keys) {
@@ -39,7 +58,10 @@ function pickFirst(obj, keys) {
 
 function parseISODate(iso) {
   if (!iso || typeof iso !== "string") return null;
-  const [y, m, d] = iso.split("-").map(Number);
+  const raw = iso.trim();
+  const datePart = raw.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return null;
+  const [y, m, d] = datePart.split("-").map(Number);
   if (!y || !m || !d) return null;
   const dt = new Date(y, m - 1, d);
   if (Number.isNaN(dt.getTime())) return null;
@@ -51,8 +73,9 @@ function parseISODate(iso) {
  * ✅ PAID helper (evita ReferenceError)
  */
 function isPaid(policy) {
-  const bs = String(policy?.billing_status || "").toUpperCase();
-  return bs === "PAID";
+  if (policy?.is_paid === true || policy?.paid === true) return true;
+  const bs = String(policy?.billing_status || policy?.payment_status || "").toUpperCase();
+  return ["PAID", "PAGADO", "APPROVED", "APROBADO"].includes(bs);
 }
 
 /**
@@ -119,8 +142,14 @@ async function fetchAdminUsers({ page = 1, search = "" } = {}) {
 
   return {
     raw: filtered,
-    total: Number(data?.count || filtered.length || 0),
+    total: (() => {
+      const rawCount = Number(data?.count ?? 0);
+      if (!rawCount) return Number(filtered.length || 0);
+      const removed = raw.length - filtered.length;
+      return Math.max(0, rawCount - Math.max(0, removed));
+    })(),
     next: data?.next ?? null,
+    previous: data?.previous ?? null,
   };
 }
 
@@ -135,9 +164,16 @@ export default function PolicyFormModal({ open, onClose, policy }) {
 
   const [products, setProducts] = useState([]);
   const [users, setUsers] = useState([]);
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersQuery, setUsersQuery] = useState("");
+  const [usersNext, setUsersNext] = useState(false);
+  const [usersPrev, setUsersPrev] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [usersErr, setUsersErr] = useState("");
+  const usersSearchTimer = useRef(null);
+  const usersRequestId = useRef(0);
 
   const [number, setNumber] = useState("");
   const [productId, setProductId] = useState("");
@@ -176,12 +212,53 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     !loadingSave &&
     !loadingMarkPaid;
 
+  const loadUsers = async ({ page = usersPage, search = usersQuery } = {}) => {
+    const requestId = ++usersRequestId.current;
+    setLoadingUsers(true);
+    setUsersErr("");
+    try {
+      let targetPage = page;
+      let res = await fetchAdminUsers({ page: targetPage, search });
+      if (usersRequestId.current !== requestId) return;
+      let safety = 0;
+      while ((res.raw || []).length === 0 && res.next && safety < 5) {
+        targetPage += 1;
+        safety += 1;
+        res = await fetchAdminUsers({ page: targetPage, search });
+        if (usersRequestId.current !== requestId) return;
+      }
+      setUsers(res.raw || []);
+      setUsersTotal(Number(res.total || 0));
+      setUsersPage(targetPage);
+      setUsersNext(Boolean(res.next));
+      setUsersPrev(Boolean(res.previous) || page > 1);
+      if ((res.raw || []).length === 0) {
+        setUsersErr("");
+      }
+    } catch {
+      if (usersRequestId.current !== requestId) return;
+      setUsers([]);
+      setUsersTotal(0);
+      setUsersNext(false);
+      setUsersPrev(false);
+      setUsersErr("No se pudieron cargar los clientes.");
+    } finally {
+      if (usersRequestId.current !== requestId) return;
+      setLoadingUsers(false);
+    }
+  };
+
   // ✅ Cargar productos + usuarios al abrir SIEMPRE (crear y editar)
   useEffect(() => {
     if (!open) return;
 
     dispatch(clearAdminPoliciesErrors());
     setUsersErr("");
+    if (usersSearchTimer.current) {
+      clearTimeout(usersSearchTimer.current);
+      usersSearchTimer.current = null;
+    }
+    usersRequestId.current += 1;
 
     if (isEdit) {
       setNumber(policy?.number || "");
@@ -225,38 +302,30 @@ export default function PolicyFormModal({ open, onClose, policy }) {
 
     (async () => {
       setLoadingProducts(true);
-      setLoadingUsers(true);
-
       try {
-        // Traemos la PRIMERA página de productos + usuarios (en paralelo)
-        const [prodRes, usersRes] = await Promise.allSettled([
-          adminPoliciesApi.listInsuranceTypes({ page: 1 }),
-          fetchAdminUsers({ page: 1 }),
-        ]);
-
+        const prodRes = await adminPoliciesApi.listInsuranceTypes({ page: 1 });
         if (!alive) return;
-
-        if (prodRes.status === "fulfilled") setProducts(prodRes.value?.results || []);
-
-        if (usersRes.status === "fulfilled") {
-          setUsers(usersRes.value?.raw || []);
-          if ((usersRes.value?.raw || []).length === 0) {
-            // no es error, pero te avisa si vino vacío
-            setUsersErr("");
-          }
-        } else {
-          setUsers([]);
-          setUsersErr("No se pudieron cargar los clientes.");
-        }
+        setProducts(prodRes?.results || []);
+      } catch {
+        if (!alive) return;
+        setProducts([]);
       } finally {
         if (!alive) return;
         setLoadingProducts(false);
-        setLoadingUsers(false);
       }
     })();
 
+    setUsersPage(1);
+    setUsersQuery("");
+    void loadUsers({ page: 1, search: "" });
+
     return () => {
       alive = false;
+      if (usersSearchTimer.current) {
+        clearTimeout(usersSearchTimer.current);
+        usersSearchTimer.current = null;
+      }
+      usersRequestId.current += 1;
     };
   }, [open, isEdit, policy, dispatch]);
 
@@ -309,6 +378,12 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       ["expired", "suspended", "cancelled"].includes(prevStatus) &&
       nextStatus === "active";
 
+    const premiumInfo = normalizeAmountInput(premium);
+    if (!premiumInfo) {
+      pushToast({ type: "error", message: "El monto debe ser un número válido." });
+      return;
+    }
+
     if (activating && !reactivateConfirmOpen) {
       setReactivateConfirmOpen(true);
       return;
@@ -316,7 +391,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
 
     const payload = {
       number: number.trim(),
-      premium: String(premium),
+      premium: premiumInfo.normalized,
     };
 
     if (activating) {
@@ -349,10 +424,16 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       return;
     }
 
+    const premiumInfo = normalizeAmountInput(premium);
+    if (!premiumInfo) {
+      pushToast({ type: "error", message: "El monto debe ser un número válido." });
+      return;
+    }
+
     // CREATE
     const payload = {
       number: number.trim(),
-      premium: String(premium),
+      premium: premiumInfo.normalized,
     };
 
     if (safeStr(productId).trim()) payload.product_id = Number(productId);
@@ -373,12 +454,20 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       );
       if (missing.length) {
         setVehicleError("Para adjuntar el vehículo, completá patente, marca, modelo y año.");
+        return;
       } else {
+        setVehicleError("");
+        const yearNum = Number(vehicle.year);
+        if (!Number.isFinite(yearNum)) {
+          setVehicleError("El año del vehículo debe ser un número válido.");
+          return;
+        }
+
         const payloadVehicle = {
           plate: safeStr(vehicle.plate).trim(),
           make: safeStr(vehicle.make).trim(),
           model: safeStr(vehicle.model).trim(),
-          year: Number(vehicle.year),
+          year: yearNum,
         };
 
         if (safeStr(vehicle.version).trim()) {
@@ -390,7 +479,12 @@ export default function PolicyFormModal({ open, onClose, policy }) {
         if (vehicle.is_zero_km) payloadVehicle.is_zero_km = true;
         if (vehicle.has_gnc) payloadVehicle.has_gnc = true;
         if (safeStr(vehicle.gnc_amount).trim()) {
-          payloadVehicle.gnc_amount = Number(vehicle.gnc_amount);
+          const gncAmountNum = Number(vehicle.gnc_amount);
+          if (!Number.isFinite(gncAmountNum)) {
+            setVehicleError("El monto de GNC debe ser numérico.");
+            return;
+          }
+          payloadVehicle.gnc_amount = gncAmountNum;
         }
 
         payload.vehicle = payloadVehicle;
@@ -624,6 +718,35 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               Cliente
               {usersErr ? <div className="field-err">{usersErr}</div> : null}
 
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <input
+                  className="form-input"
+                  value={usersQuery}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setUsersQuery(next);
+                    setUsersPage(1);
+                    if (usersSearchTimer.current) {
+                      clearTimeout(usersSearchTimer.current);
+                    }
+                    usersSearchTimer.current = setTimeout(() => {
+                      usersSearchTimer.current = null;
+                      void loadUsers({ page: 1, search: next });
+                    }, 300);
+                  }}
+                  placeholder="Buscar cliente por nombre o email…"
+                  disabled={loadingUsers}
+                />
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={() => loadUsers({ page: 1, search: usersQuery })}
+                  disabled={loadingUsers}
+                >
+                  {loadingUsers ? "Buscando…" : "Buscar"}
+                </button>
+              </div>
+
               <select
                 className={`form-input ${getFieldErr("user_id") ? "is-invalid" : ""}`}
                 value={userId}
@@ -646,6 +769,32 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               </select>
 
               {getFieldErr("user_id") && <div className="field-err">{getFieldErr("user_id")}</div>}
+
+              <div
+                className="table-muted"
+                style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 10 }}
+              >
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={() => loadUsers({ page: Math.max(1, usersPage - 1), search: usersQuery })}
+                  disabled={loadingUsers || !usersPrev}
+                >
+                  Anterior
+                </button>
+                <span className="mono">
+                  Página {usersPage}
+                  {usersTotal ? ` · Total ${usersTotal}` : ""}
+                </span>
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={() => loadUsers({ page: usersPage + 1, search: usersQuery })}
+                  disabled={loadingUsers || !usersNext}
+                >
+                  Siguiente
+                </button>
+              </div>
             </label>
 
             {!isEdit && (

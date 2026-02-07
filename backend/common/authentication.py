@@ -1,14 +1,33 @@
-from rest_framework.authentication import get_authorization_header
+from django.conf import settings
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 
-class StrictJWTAuthentication(JWTAuthentication):
+class CookieJWTAuthentication(JWTAuthentication):
+    """
+    JWTAuthentication that also supports access tokens in HttpOnly cookies.
+    """
+
+    def get_header(self, request):
+        header = super().get_header(request)
+        if header:
+            return header
+
+        cookie_name = getattr(settings, "JWT_ACCESS_COOKIE", None)
+        if not cookie_name:
+            return None
+        token = request.COOKIES.get(cookie_name)
+        if not token:
+            return None
+        return f"Bearer {token}".encode()
+
+
+class StrictJWTAuthentication(CookieJWTAuthentication):
     """Explicit reference to the default JWT guard so intent is clear in PRIVATE endpoints."""
 
 
-class SoftJWTAuthentication(JWTAuthentication):
+class SoftJWTAuthentication(CookieJWTAuthentication):
     """
     Like JWTAuthentication but never raises InvalidToken/ExpiredToken for requests that
     have been marked as PUBLIC/HYBRID by the authenticator mixins.
@@ -25,7 +44,7 @@ class SoftJWTAuthentication(JWTAuthentication):
         super().__init__()
 
     def authenticate(self, request):
-        header = get_authorization_header(request)
+        header = self.get_header(request)
         if not header:
             return None
 

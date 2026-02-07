@@ -1,5 +1,4 @@
 import { api, apiPublic } from "./http";
-import { tokenStorage } from "./tokenStorage";
 
 function isAdult(birthDate) {
   if (!birthDate) return false;
@@ -47,11 +46,8 @@ export const authApi = {
   },
 
   async refresh() {
-    const refresh = tokenStorage.getRefresh();
-    if (!refresh) throw new Error("No refresh token");
-
     // ✅ Contract: POST /api/auth/refresh
-    const res = await apiPublic.post("/auth/refresh", { refresh });
+    const res = await apiPublic.post("/auth/refresh", {});
     return res.data;
   },
 

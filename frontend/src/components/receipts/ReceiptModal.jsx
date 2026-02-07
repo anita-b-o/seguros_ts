@@ -1,5 +1,5 @@
 // src/components/receipts/ReceiptModal.jsx
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { closeReceiptModal, downloadReceiptPdfThunk } from "@/features/receipts/receiptsSlice";
 import ReceiptPreview from "./ReceiptPreview";
@@ -17,6 +17,74 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+function collectCssText() {
+  let css = "";
+  const sheets = Array.from(document.styleSheets || []);
+  for (const sheet of sheets) {
+    try {
+      const rules = sheet.cssRules || [];
+      for (const rule of rules) {
+        css += `${rule.cssText}\n`;
+      }
+    } catch {
+      // Ignorar hojas con CORS/permiso denegado.
+    }
+  }
+  return css;
+}
+
+async function nodeToPngBlob(node, { scale = 2 } = {}) {
+  if (!node) throw new Error("Nodo de comprobante no disponible.");
+  const rect = node.getBoundingClientRect();
+  const width = Math.max(1, Math.ceil(rect.width));
+  const height = Math.max(1, Math.ceil(rect.height));
+
+  const cssText = collectCssText();
+  const wrapper = document.createElement("div");
+  const clone = node.cloneNode(true);
+  clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+  wrapper.appendChild(clone);
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+      <foreignObject width="100%" height="100%">
+        <div xmlns="http://www.w3.org/1999/xhtml">
+          <style>${cssText}</style>
+          ${wrapper.innerHTML}
+        </div>
+      </foreignObject>
+    </svg>
+  `;
+
+  const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+  const img = new Image();
+  const imageLoaded = new Promise((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("No se pudo renderizar la imagen."));
+  });
+  img.src = svgUrl;
+  await imageLoaded;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(width * scale);
+  canvas.height = Math.ceil(height * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("No se pudo crear el canvas.");
+  ctx.scale(scale, scale);
+  ctx.drawImage(img, 0, 0, width, height);
+
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("No se pudo generar la imagen."));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
 function pickFirst(obj, keys) {
   if (!obj) return null;
   for (const k of keys) {
@@ -30,6 +98,9 @@ export default function ReceiptModal() {
   const dispatch = useDispatch();
 
   const { receiptModalOpen, selectedReceipt, downloadByReceiptId } = useSelector((s) => s.receipts);
+  const previewRef = useRef(null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState("");
 
   const isOpen = Boolean(receiptModalOpen && selectedReceipt?.policy && selectedReceipt?.receipt);
 
@@ -79,6 +150,21 @@ export default function ReceiptModal() {
     }
   };
 
+  const onDownloadImage = async () => {
+    if (!receiptId || imageBusy) return;
+    setImageError("");
+    setImageBusy(true);
+    try {
+      const blob = await nodeToPngBlob(previewRef.current, { scale: 2 });
+      const filename = `comprobante_${policyNumber}_${receiptId}.png`;
+      downloadBlob(blob, filename);
+    } catch (e) {
+      setImageError(e?.message || "No se pudo generar la imagen.");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -109,7 +195,7 @@ export default function ReceiptModal() {
 
         {/* Body */}
         <div className="rcpt-modal-body">
-          <ReceiptPreview policy={policy} receipt={receipt} />
+          <ReceiptPreview policy={policy} receipt={receipt} ref={previewRef} />
         </div>
 
         {/* Footer */}
@@ -117,10 +203,14 @@ export default function ReceiptModal() {
           <button className="rcpt-btn" onClick={onDownload} disabled={downloading} type="button">
             {downloading ? "Descargando…" : "Descargar PDF"}
           </button>
+          <button className="rcpt-btn rcpt-btn-ghost" onClick={onDownloadImage} disabled={imageBusy} type="button">
+            {imageBusy ? "Generando…" : "Descargar imagen"}
+          </button>
 
           {downloadState?.error ? (
             <div className="rcpt-alert">{String(downloadState.error)}</div>
           ) : null}
+          {imageError ? <div className="rcpt-alert">{String(imageError)}</div> : null}
         </div>
       </div>
     </div>

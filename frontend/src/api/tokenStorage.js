@@ -1,20 +1,19 @@
-// Keep keys short and stable to match backend/frontend docs.
-const ACCESS_KEY = "sc_access";
-const REFRESH_KEY = "sc_refresh";
+let accessToken = null;
+let refreshToken = null;
 
 export const tokenStorage = {
   getAccess() {
-    return localStorage.getItem(ACCESS_KEY);
+    return accessToken;
   },
   getRefresh() {
-    return localStorage.getItem(REFRESH_KEY);
+    return refreshToken;
   },
   set(access, refresh) {
-    if (access) localStorage.setItem(ACCESS_KEY, access);
-    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+    if (access) accessToken = access;
+    if (refresh) refreshToken = refresh;
   },
   clear() {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    accessToken = null;
+    refreshToken = null;
   },
 };
