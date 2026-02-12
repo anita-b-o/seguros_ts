@@ -24,6 +24,8 @@ __pycache__/
 # Archivos de entorno
 .env
 .env.*
+!.env.example
+!.env.*.example
 backend/.env
 !backend/.env.example
 
@@ -50,6 +52,8 @@ frontend/coverage/
 frontend/*.log
 frontend/.env
 frontend/.env.*
+!frontend/.env.example
+!frontend/.env.*.example
 frontend/.DS_Store
 
 # Ignore generated archives

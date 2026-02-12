@@ -8,7 +8,12 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from common.security import PublicEndpointMixin
-from .serializers import QuoteInputSerializer, QuoteShareCreateSerializer, QuoteShareSerializer
+from .serializers import (
+    QuoteInputSerializer,
+    QuoteShareCreateSerializer,
+    QuoteShareCreateMultipartSerializer,
+    QuoteShareSerializer,
+)
 from .models import QuoteShare
 from products.models import Product
 
@@ -71,10 +76,41 @@ class QuoteShareCreateView(PublicEndpointMixin, APIView):
     public_write_allowed = True  # Public POST crea token compartido
 
     def post(self, request):
-        serializer = QuoteShareCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        obj = serializer.save()
-        return Response({"id": obj.token}, status=status.HTTP_201_CREATED)
+        uses_multipart = any(
+            key in request.FILES
+            for key in ("photo_front", "photo_back", "photo_right", "photo_left")
+        )
+
+        if uses_multipart:
+            serializer = QuoteShareCreateMultipartSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            data = serializer.validated_data
+            obj = QuoteShare(
+                token=None,
+                phone=data["whatsapp"],
+                make=data["make"],
+                model=data["model"],
+                version=data["version"],
+                year=data["year"],
+                city=data["locality"],
+                has_garage=data["garage"],
+                is_zero_km=False,
+                usage=data["usage"],
+                has_gnc=data["gnc"],
+                gnc_amount=data.get("gnc_amount"),
+            )
+            obj.photo_front = data["photo_front"]
+            obj.photo_back = data["photo_back"]
+            obj.photo_right = data["photo_right"]
+            obj.photo_left = data["photo_left"]
+            obj.save()
+        else:
+            serializer = QuoteShareCreateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            obj = serializer.save()
+
+        url = request.build_absolute_uri(f"/quote/share/{obj.token}")
+        return Response({"token": obj.token, "url": url}, status=status.HTTP_201_CREATED)
 
 
 class QuoteShareDetailView(PublicEndpointMixin, APIView):

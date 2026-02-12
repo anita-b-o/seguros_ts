@@ -1,0 +1,26 @@
+[Unit]
+Description=SecureSTS Django Backend (Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=securests
+Group=www-data
+WorkingDirectory=/srv/securests/app/backend
+EnvironmentFile=/etc/securests/backend.env
+Environment=DJANGO_SETTINGS_MODULE=seguros.settings
+
+ExecStart=/srv/securests/venv/bin/gunicorn \
+    seguros.wsgi:application \
+    --bind 127.0.0.1:8000 \
+    --workers 3 \
+    --timeout 60 \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level info
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

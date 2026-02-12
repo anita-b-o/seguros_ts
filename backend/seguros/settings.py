@@ -21,7 +21,17 @@ def _bool(value, default=False):
     return str(value).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 
-if not _bool(os.getenv("DJANGO_SKIP_DOTENV")):
+# Detect environment early to guard .env loading in production
+_raw_env = (
+    os.getenv("DJANGO_ENV")
+    or os.getenv("ENVIRONMENT")
+    or os.getenv("ENV")
+    or os.getenv("APP_ENV")
+    or "development"
+).strip().lower()
+_skip_dotenv = _bool(os.getenv("DJANGO_SKIP_DOTENV")) or _raw_env in ("prod", "production")
+
+if not _skip_dotenv:
     load_dotenv(BASE_DIR / ".env")
 
 
@@ -106,10 +116,13 @@ DEPLOYMENT_ENV = (
     or os.getenv("ENV")
     or os.getenv("APP_ENV")
     or "development"
-)
-DEPLOYMENT_ENV = DEPLOYMENT_ENV.strip().lower()
+).strip().lower()
 RUNNING_TESTS = "test" in " ".join(sys.argv)
-DEBUG = _bool(os.getenv("DJANGO_DEBUG") or os.getenv("DEBUG"), False)
+_debug_env = os.getenv("DJANGO_DEBUG") or os.getenv("DEBUG")
+DEBUG = _bool(_debug_env, False)
+
+if DEPLOYMENT_ENV in ("prod", "production"):
+    DEBUG = False
 
 # API policy: no forced redirects (APPEND_SLASH=False); routers expose endpoints without trailing slash and we duplicate paths where needed.
 APPEND_SLASH = False

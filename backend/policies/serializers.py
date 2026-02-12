@@ -706,7 +706,7 @@ class AdminPolicyCreateSerializer(PolicySerializer):
         return self._add_months(start_date, 3)
 
     def validate(self, attrs):
-        data = super(serializers.ModelSerializer, self).validate(attrs)
+        data = super().validate(attrs)
         instance = getattr(self, "instance", None)
 
         if instance is not None and getattr(instance, "is_deleted", False):

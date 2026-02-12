@@ -39,6 +39,7 @@ class DataURLImageField(serializers.ImageField):
 
 class QuoteShareCreateSerializer(serializers.ModelSerializer):
     photos = serializers.DictField(child=DataURLImageField(), write_only=True)
+    is_zero_km = serializers.BooleanField(required=False, default=False)
 
     class Meta:
         model = QuoteShare
@@ -76,6 +77,26 @@ class QuoteShareCreateSerializer(serializers.ModelSerializer):
         obj.photo_left = photos.get("left")
         obj.save()
         return obj
+
+
+class QuoteShareCreateMultipartSerializer(serializers.Serializer):
+    whatsapp = serializers.CharField()
+    usage = serializers.CharField()
+    make = serializers.CharField()
+    model = serializers.CharField()
+    version = serializers.CharField()
+    year = serializers.IntegerField()
+    locality = serializers.CharField()
+    garage = serializers.BooleanField()
+    gnc = serializers.BooleanField()
+    gnc_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+
+    photo_front = serializers.ImageField()
+    photo_back = serializers.ImageField()
+    photo_right = serializers.ImageField()
+    photo_left = serializers.ImageField()
 
 
 class QuoteShareSerializer(serializers.ModelSerializer):

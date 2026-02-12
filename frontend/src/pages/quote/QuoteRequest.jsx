@@ -45,10 +45,10 @@ export default function QuoteRequest() {
   const [photoRight, setPhotoRight] = useState(null);
   const [photoLeft, setPhotoLeft] = useState(null);
 
-  const refFront = "/refs/front.png";
-  const refBack = "/refs/back.png";
-  const refRight = "/refs/right.png";
-  const refLeft = "/refs/left.png";
+  const refFront = "/illustrations/front-car.png";
+  const refBack = "/illustrations/back-car.png";
+  const refRight = "/illustrations/right-car.png";
+  const refLeft = "/illustrations/left-car.png";
 
   /* =======================
      Validación

@@ -69,6 +69,8 @@ urlpatterns = [
     # Healthcheck
     path("healthz/", healthcheck, name="healthcheck"),
     path("healthz", healthcheck, name="healthcheck-noslash"),
+    path("api/health", healthcheck, name="healthcheck-api"),
+    path("api/health/", healthcheck, name="healthcheck-api-slash"),
 
     # =========================
     # API common ✅
