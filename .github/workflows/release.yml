@@ -125,7 +125,7 @@ jobs:
       DEPLOY_NGINX_RELOAD: ${{ vars.DEPLOY_NGINX_RELOAD || 'true' }}
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-bundle
           path: out
@@ -260,7 +260,7 @@ jobs:
       DEPLOY_NGINX_RELOAD: ${{ vars.DEPLOY_NGINX_RELOAD || 'true' }}
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-bundle
           path: out
