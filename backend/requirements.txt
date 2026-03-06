@@ -1,5 +1,5 @@
 asgiref==3.10.0
-chardet==5.2.0
+chardet==7.0.1
 Django==5.0.6
 django-cors-headers==4.4.0
 djangorestframework==3.15.2
