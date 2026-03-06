@@ -8,7 +8,7 @@ pillow==10.3.0
 psycopg2-binary==2.9.9
 PyJWT==2.10.1
 google-auth==2.27.0
-pypdf==6.1.1
+pypdf==6.7.5
 python-dotenv==1.0.1
 reportlab==4.2.2
 sqlparse==0.5.3
