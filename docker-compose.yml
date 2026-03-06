@@ -1,6 +1,8 @@
 version: "3.9"
 services:
   backend:
+    # Docker strategy: app runtime stack (backend + redis).
+    # For hardened production with Nginx/systemd, use deploy/README_DEPLOY.md.
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -13,6 +15,11 @@ services:
     restart: unless-stopped
     depends_on:
       - redis
+    healthcheck:
+      test: ["CMD", "python", "manage.py", "check"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   redis:
     image: redis:7-alpine

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { PAYMENTS_PENDING_ENDPOINT } from "../../src/api/payments";
+
+const PAYMENTS_PENDING_ENDPOINT = "/payments/pending";
 
 const USER_PROFILE = {
   id: 99,

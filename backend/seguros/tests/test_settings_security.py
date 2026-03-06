@@ -49,3 +49,34 @@ class SettingsSecurityTests(SimpleTestCase):
             settings.DATABASES["default"]["ENGINE"],
             "django.db.backends.sqlite3",
         )
+
+    def test_production_rejects_weak_secret_key(self):
+        env = self._common_env()
+        env["DJANGO_SECRET_KEY"] = "super-secret"
+        env["DB_ENGINE"] = "django.db.backends.postgresql"
+        env["DB_NAME"] = "db"
+        env["DB_USER"] = "user"
+        env["DB_PASSWORD"] = "pass"
+        env["DB_HOST"] = "localhost"
+        env["DB_PORT"] = "5432"
+        env["REDIS_URL"] = "redis://localhost:6379/1"
+        env["EMAIL_BACKEND"] = "django.core.mail.backends.smtp.EmailBackend"
+        with patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(ImproperlyConfigured):
+                _reload_settings()
+
+    def test_production_defaults_hsts_preload_true(self):
+        env = self._common_env()
+        env["DJANGO_SECRET_KEY"] = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789!@#$%^&*()-_=+[]{}"
+        env["DB_ENGINE"] = "django.db.backends.postgresql"
+        env["DB_NAME"] = "db"
+        env["DB_USER"] = "user"
+        env["DB_PASSWORD"] = "pass"
+        env["DB_HOST"] = "localhost"
+        env["DB_PORT"] = "5432"
+        env["REDIS_URL"] = "redis://localhost:6379/1"
+        env["EMAIL_BACKEND"] = "django.core.mail.backends.smtp.EmailBackend"
+        env.pop("SECURE_HSTS_PRELOAD", None)
+        with patch.dict(os.environ, env, clear=False):
+            settings = _reload_settings()
+        self.assertTrue(settings.SECURE_HSTS_PRELOAD)

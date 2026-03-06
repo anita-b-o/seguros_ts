@@ -1,0 +1,376 @@
+name: Release And Deploy
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit to release"
+        required: false
+        default: "main"
+      target_env:
+        description: "Deployment target (workflow_dispatch only)"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  quality-gate:
+    name: Quality Gate Before Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Security audit (backend - pip-audit)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt
+
+      - name: Security audit (frontend - npm audit)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+
+      - name: Backend tests
+        working-directory: backend
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+          ./scripts/test_all.sh
+
+      - name: Frontend checks
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run verify:endpoints
+          npx playwright install --with-deps chromium
+          npm run test:e2e -- tests/e2e/logout.spec.js
+          npm run build
+
+  build-release-artifacts:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: quality-gate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Build frontend dist
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package release files
+        run: |
+          mkdir -p out
+          tar -czf out/backend.tar.gz backend
+          tar -czf out/frontend-dist.tar.gz frontend/dist
+          tar -czf out/deploy-config.tar.gz deploy
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: out/*
+          if-no-files-found: error
+
+  deploy-staging:
+    name: Deploy To Staging
+    runs-on: ubuntu-latest
+    needs: build-release-artifacts
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'staging')
+    environment: staging
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    env:
+      DEPLOY_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      DEPLOY_BASE_PATH: ${{ vars.DEPLOY_BASE_PATH || '/srv/securests' }}
+      DEPLOY_BACKEND_ENV_FILE: ${{ vars.DEPLOY_BACKEND_ENV_FILE || '/etc/securests/backend.env' }}
+      DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME || 'securests-backend' }}
+      DEPLOY_HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL || 'https://securests.com/api/health' }}
+      DEPLOY_NGINX_RELOAD: ${{ vars.DEPLOY_NGINX_RELOAD || 'true' }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: out
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Prepare SSH known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$DEPLOY_PORT" -H "${{ secrets.DEPLOY_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload artifacts to staging host
+        run: |
+          REMOTE_TMP="/tmp/securests-release-${GITHUB_RUN_ID}"
+          ssh -p "$DEPLOY_PORT" "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}" "mkdir -p '$REMOTE_TMP'"
+          scp -P "$DEPLOY_PORT" out/backend.tar.gz out/frontend-dist.tar.gz "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}:$REMOTE_TMP/"
+
+      - name: Deploy on staging host (with rollback)
+        run: |
+          REMOTE_TMP="/tmp/securests-release-${GITHUB_RUN_ID}"
+          ssh -p "$DEPLOY_PORT" "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}" \
+            "GITHUB_SHA='${GITHUB_SHA}' \
+            DEPLOY_BASE_PATH='$DEPLOY_BASE_PATH' \
+            DEPLOY_BACKEND_ENV_FILE='$DEPLOY_BACKEND_ENV_FILE' \
+            DEPLOY_SERVICE_NAME='$DEPLOY_SERVICE_NAME' \
+            DEPLOY_HEALTHCHECK_URL='$DEPLOY_HEALTHCHECK_URL' \
+            DEPLOY_NGINX_RELOAD='$DEPLOY_NGINX_RELOAD' \
+            REMOTE_TMP='$REMOTE_TMP' \
+            bash -s" <<'EOF'
+          set -Eeuo pipefail
+
+          BASE_PATH="${DEPLOY_BASE_PATH}"
+          APP_PATH="$BASE_PATH/app"
+          BACKUP_PATH="$BASE_PATH/backups"
+          STAGING_PATH="$BASE_PATH/tmp/deploy-${GITHUB_SHA:0:7}"
+          RELEASE_ID="$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}"
+
+          BACKUP_BACKEND="$BACKUP_PATH/backend-${RELEASE_ID}.tar.gz"
+          BACKUP_FRONTEND="$BACKUP_PATH/frontend-dist-${RELEASE_ID}.tar.gz"
+
+          mkdir -p "$BACKUP_PATH" "$STAGING_PATH"
+
+          if ! command -v rsync >/dev/null 2>&1; then
+            echo "rsync is required on remote host."
+            exit 1
+          fi
+
+          tar -czf "$BACKUP_BACKEND" -C "$APP_PATH" backend
+          if [ -d "$APP_PATH/frontend/dist" ]; then
+            tar -czf "$BACKUP_FRONTEND" -C "$APP_PATH/frontend" dist
+          fi
+
+          rollback() {
+            echo "Deploy failed. Rolling back..."
+            rm -rf "$APP_PATH/backend"
+            mkdir -p "$APP_PATH"
+            tar -xzf "$BACKUP_BACKEND" -C "$APP_PATH"
+
+            mkdir -p "$APP_PATH/frontend"
+            rm -rf "$APP_PATH/frontend/dist"
+            if [ -f "$BACKUP_FRONTEND" ]; then
+              tar -xzf "$BACKUP_FRONTEND" -C "$APP_PATH/frontend"
+            fi
+
+            sudo systemctl restart "$DEPLOY_SERVICE_NAME"
+            if [ "$DEPLOY_NGINX_RELOAD" = "true" ]; then
+              sudo systemctl reload nginx
+            fi
+          }
+
+          trap rollback ERR
+
+          tar -xzf "$REMOTE_TMP/backend.tar.gz" -C "$STAGING_PATH"
+          tar -xzf "$REMOTE_TMP/frontend-dist.tar.gz" -C "$STAGING_PATH"
+
+          rsync -a --delete "$STAGING_PATH/backend/" "$APP_PATH/backend/"
+          mkdir -p "$APP_PATH/frontend/dist"
+          rsync -a --delete "$STAGING_PATH/frontend/dist/" "$APP_PATH/frontend/dist/"
+
+          set -a
+          . "$DEPLOY_BACKEND_ENV_FILE"
+          set +a
+
+          "$BASE_PATH/venv/bin/pip" install -r "$APP_PATH/backend/requirements.txt"
+          cd "$APP_PATH/backend"
+          "$BASE_PATH/venv/bin/python" manage.py migrate --noinput
+          "$BASE_PATH/venv/bin/python" manage.py collectstatic --noinput
+
+          sudo systemctl restart "$DEPLOY_SERVICE_NAME"
+          if [ "$DEPLOY_NGINX_RELOAD" = "true" ]; then
+            sudo systemctl reload nginx
+          fi
+
+          ok=false
+          for _ in 1 2 3 4 5; do
+            if curl --fail --silent --show-error "$DEPLOY_HEALTHCHECK_URL" >/dev/null; then
+              ok=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ok" != "true" ]; then
+            echo "Healthcheck failed after deploy: $DEPLOY_HEALTHCHECK_URL"
+            exit 1
+          fi
+
+          rm -rf "$STAGING_PATH" "$REMOTE_TMP"
+          trap - ERR
+          echo "Deploy successful."
+          EOF
+
+  deploy-production:
+    name: Deploy To Production
+    runs-on: ubuntu-latest
+    needs: build-release-artifacts
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'production')
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      DEPLOY_BASE_PATH: ${{ vars.DEPLOY_BASE_PATH || '/srv/securests' }}
+      DEPLOY_BACKEND_ENV_FILE: ${{ vars.DEPLOY_BACKEND_ENV_FILE || '/etc/securests/backend.env' }}
+      DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME || 'securests-backend' }}
+      DEPLOY_HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL || 'https://securests.com/api/health' }}
+      DEPLOY_NGINX_RELOAD: ${{ vars.DEPLOY_NGINX_RELOAD || 'true' }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: out
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Prepare SSH known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$DEPLOY_PORT" -H "${{ secrets.DEPLOY_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload artifacts to production host
+        run: |
+          REMOTE_TMP="/tmp/securests-release-${GITHUB_RUN_ID}"
+          ssh -p "$DEPLOY_PORT" "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}" "mkdir -p '$REMOTE_TMP'"
+          scp -P "$DEPLOY_PORT" out/backend.tar.gz out/frontend-dist.tar.gz "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}:$REMOTE_TMP/"
+
+      - name: Deploy on production host (with rollback)
+        run: |
+          REMOTE_TMP="/tmp/securests-release-${GITHUB_RUN_ID}"
+          ssh -p "$DEPLOY_PORT" "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}" \
+            "GITHUB_SHA='${GITHUB_SHA}' \
+            DEPLOY_BASE_PATH='$DEPLOY_BASE_PATH' \
+            DEPLOY_BACKEND_ENV_FILE='$DEPLOY_BACKEND_ENV_FILE' \
+            DEPLOY_SERVICE_NAME='$DEPLOY_SERVICE_NAME' \
+            DEPLOY_HEALTHCHECK_URL='$DEPLOY_HEALTHCHECK_URL' \
+            DEPLOY_NGINX_RELOAD='$DEPLOY_NGINX_RELOAD' \
+            REMOTE_TMP='$REMOTE_TMP' \
+            bash -s" <<'EOF'
+          set -Eeuo pipefail
+
+          BASE_PATH="${DEPLOY_BASE_PATH}"
+          APP_PATH="$BASE_PATH/app"
+          BACKUP_PATH="$BASE_PATH/backups"
+          STAGING_PATH="$BASE_PATH/tmp/deploy-${GITHUB_SHA:0:7}"
+          RELEASE_ID="$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}"
+
+          BACKUP_BACKEND="$BACKUP_PATH/backend-${RELEASE_ID}.tar.gz"
+          BACKUP_FRONTEND="$BACKUP_PATH/frontend-dist-${RELEASE_ID}.tar.gz"
+
+          mkdir -p "$BACKUP_PATH" "$STAGING_PATH"
+
+          if ! command -v rsync >/dev/null 2>&1; then
+            echo "rsync is required on remote host."
+            exit 1
+          fi
+
+          tar -czf "$BACKUP_BACKEND" -C "$APP_PATH" backend
+          if [ -d "$APP_PATH/frontend/dist" ]; then
+            tar -czf "$BACKUP_FRONTEND" -C "$APP_PATH/frontend" dist
+          fi
+
+          rollback() {
+            echo "Deploy failed. Rolling back..."
+            rm -rf "$APP_PATH/backend"
+            mkdir -p "$APP_PATH"
+            tar -xzf "$BACKUP_BACKEND" -C "$APP_PATH"
+
+            mkdir -p "$APP_PATH/frontend"
+            rm -rf "$APP_PATH/frontend/dist"
+            if [ -f "$BACKUP_FRONTEND" ]; then
+              tar -xzf "$BACKUP_FRONTEND" -C "$APP_PATH/frontend"
+            fi
+
+            sudo systemctl restart "$DEPLOY_SERVICE_NAME"
+            if [ "$DEPLOY_NGINX_RELOAD" = "true" ]; then
+              sudo systemctl reload nginx
+            fi
+          }
+
+          trap rollback ERR
+
+          tar -xzf "$REMOTE_TMP/backend.tar.gz" -C "$STAGING_PATH"
+          tar -xzf "$REMOTE_TMP/frontend-dist.tar.gz" -C "$STAGING_PATH"
+
+          rsync -a --delete "$STAGING_PATH/backend/" "$APP_PATH/backend/"
+          mkdir -p "$APP_PATH/frontend/dist"
+          rsync -a --delete "$STAGING_PATH/frontend/dist/" "$APP_PATH/frontend/dist/"
+
+          set -a
+          . "$DEPLOY_BACKEND_ENV_FILE"
+          set +a
+
+          "$BASE_PATH/venv/bin/pip" install -r "$APP_PATH/backend/requirements.txt"
+          cd "$APP_PATH/backend"
+          "$BASE_PATH/venv/bin/python" manage.py migrate --noinput
+          "$BASE_PATH/venv/bin/python" manage.py collectstatic --noinput
+
+          sudo systemctl restart "$DEPLOY_SERVICE_NAME"
+          if [ "$DEPLOY_NGINX_RELOAD" = "true" ]; then
+            sudo systemctl reload nginx
+          fi
+
+          ok=false
+          for _ in 1 2 3 4 5; do
+            if curl --fail --silent --show-error "$DEPLOY_HEALTHCHECK_URL" >/dev/null; then
+              ok=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ok" != "true" ]; then
+            echo "Healthcheck failed after deploy: $DEPLOY_HEALTHCHECK_URL"
+            exit 1
+          fi
+
+          rm -rf "$STAGING_PATH" "$REMOTE_TMP"
+          trap - ERR
+          echo "Deploy successful."
+          EOF

@@ -8,14 +8,20 @@ const initialState = {
   otp_required: false,
 };
 
-export const loadMe = createAsyncThunk("auth/me", async (_, { rejectWithValue }) => {
-  try {
-    const me = await authApi.me();
-    return me;
-  } catch (e) {
-    return rejectWithValue(authApi.normalizeError(e));
+export const loadMe = createAsyncThunk(
+  "auth/me",
+  async ({ silent = false } = {}, { rejectWithValue }) => {
+    try {
+      const me = await authApi.me();
+      return me;
+    } catch (e) {
+      return rejectWithValue({
+        message: authApi.normalizeError(e),
+        silent,
+      });
+    }
   }
-});
+);
 
 export const login = createAsyncThunk(
   "auth/login",
@@ -91,7 +97,9 @@ const authSlice = createSlice({
   extraReducers: (b) => {
     b
       // loadMe
-      .addCase(loadMe.pending, (s) => {
+      .addCase(loadMe.pending, (s, a) => {
+        const silent = !!a.meta?.arg?.silent;
+        if (silent) return;
         s.status = "loading";
         s.error = null;
       })
@@ -100,9 +108,10 @@ const authSlice = createSlice({
         s.user = a.payload;
       })
       .addCase(loadMe.rejected, (s, a) => {
-        s.status = "failed";
+        const silent = !!a.payload?.silent;
+        s.status = silent ? "idle" : "failed";
         s.user = null;
-        s.error = a.payload || "No se pudo cargar el usuario.";
+        s.error = silent ? null : a.payload?.message || "No se pudo cargar el usuario.";
       })
 
       // login

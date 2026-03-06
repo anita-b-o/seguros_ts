@@ -22,17 +22,23 @@ from accounts.auth_views import (
     CookieTokenRefreshView,
 )
 from accounts.views import deprecated_lookup, AdminUserViewSet
+from common.health import build_liveness_payload, build_readiness_payload
 from .legacy_views import legacy_announcements_list, legacy_announcements_detail
 from common.views import AppSettingsView
 
 
 # === Healthcheck ===
-def healthcheck(request):
-    """
-    Endpoint simple para verificar el estado del servidor.
-    Útil para monitoreo o comprobaciones automáticas.
-    """
-    return JsonResponse({"status": "ok"}, status=200)
+def readiness_healthcheck(request):
+    payload, has_failures = build_readiness_payload(
+        include_details=getattr(settings, "HEALTHCHECK_INCLUDE_DETAILS", True)
+    )
+    fail_open = getattr(settings, "HEALTHCHECK_FAIL_OPEN", False)
+    status_code = 200 if (not has_failures or fail_open) else 503
+    return JsonResponse(payload, status=status_code)
+
+
+def liveness_healthcheck(_request):
+    return JsonResponse(build_liveness_payload(), status=200)
 
 
 def _env_bool(val, default=False):
@@ -67,10 +73,14 @@ urlpatterns = [
     path("admin/", _admin_redirect),
 
     # Healthcheck
-    path("healthz/", healthcheck, name="healthcheck"),
-    path("healthz", healthcheck, name="healthcheck-noslash"),
-    path("api/health", healthcheck, name="healthcheck-api"),
-    path("api/health/", healthcheck, name="healthcheck-api-slash"),
+    path("healthz/", readiness_healthcheck, name="healthcheck"),
+    path("healthz", readiness_healthcheck, name="healthcheck-noslash"),
+    path("api/health", readiness_healthcheck, name="healthcheck-api"),
+    path("api/health/", readiness_healthcheck, name="healthcheck-api-slash"),
+    path("healthz/live", liveness_healthcheck, name="healthcheck-live-noslash"),
+    path("healthz/live/", liveness_healthcheck, name="healthcheck-live-slash"),
+    path("api/health/live", liveness_healthcheck, name="healthcheck-api-live-noslash"),
+    path("api/health/live/", liveness_healthcheck, name="healthcheck-api-live-slash"),
 
     # =========================
     # API common ✅

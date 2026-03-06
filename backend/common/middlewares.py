@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 
+from .metrics import observe_http_request
 from .logging import get_request_id, request_id_ctx_var
 
 access_logger = logging.getLogger("seguros.access")
@@ -214,3 +215,9 @@ class AccessLogMiddleware:
             if truncated:
                 log_fields["payload_truncated"] = True
         access_logger.info("http.request", extra=log_fields)
+        observe_http_request(
+            method=request.method,
+            route=route_value or request.path,
+            status_code=status_code,
+            duration_ms=duration_ms,
+        )

@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase, APIClient
 
 from policies.models import Policy
+from products.models import Product
 
 User = get_user_model()
 
@@ -29,6 +30,13 @@ class AdminPolicyUserAssociationTests(APITestCase):
         )
         self.policy = Policy.objects.create(
             number="SC-ADMIN-001",
+            product=Product.objects.create(
+                code="TEST-ADMIN-POL",
+                name="Plan Test Admin",
+                plan_type="TR",
+                vehicle_type="AUTO",
+                base_price=12000,
+            ),
             premium=12000,
             status="active",
             start_date=date.today(),

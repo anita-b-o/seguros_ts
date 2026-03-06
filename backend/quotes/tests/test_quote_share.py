@@ -47,7 +47,7 @@ class QuoteShareTests(APITestCase):
         )
         res = self.client.post("/api/quotes/share", payload, format="json")
         self.assertEqual(res.status_code, 201)
-        return res.data["id"]
+        return res.data["token"]
 
     def test_quote_share_upload_ok(self):
         payload = self._valid_payload(
@@ -55,7 +55,7 @@ class QuoteShareTests(APITestCase):
         )
         res = self.client.post("/api/quotes/share", payload, format="json")
         self.assertEqual(res.status_code, 201)
-        self.assertIn("id", res.data)
+        self.assertIn("token", res.data)
 
     def test_quote_share_rejects_oversized_image(self):
         big_bytes = b"a" * (6 * 1024 * 1024)  # 6MB

@@ -21,6 +21,19 @@ def _bool(value, default=False):
     return str(value).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 
+def _is_weak_secret_key(value):
+    if not value:
+        return True
+    # Align with Django's security check expectations.
+    if value.startswith("django-insecure-"):
+        return True
+    if len(value) < 50:
+        return True
+    if len(set(value)) < 5:
+        return True
+    return False
+
+
 # Detect environment early to guard .env loading in production
 _raw_env = (
     os.getenv("DJANGO_ENV")
@@ -139,6 +152,11 @@ if not SECRET_KEY:
     else:
         raise ImproperlyConfigured(
         "DJANGO_SECRET_KEY is required when DEBUG=False."
+    )
+
+if not DEBUG and _is_weak_secret_key(SECRET_KEY):
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY is too weak for production. Use a long random value (50+ chars)."
     )
 
 SERVE_MEDIA_FILES = _bool(os.getenv("SERVE_MEDIA_FILES"), DEBUG)
@@ -309,6 +327,11 @@ ensure_redis_cache_configuration(
 RUN_REDIS_HEALTHCHECK = _bool(os.getenv("RUN_REDIS_HEALTHCHECK"), False)
 if RUN_REDIS_HEALTHCHECK:
     ensure_redis_cache_health(DEBUG, running_tests=RUNNING_TESTS)
+
+# === HEALTHCHECKS ===
+HEALTHCHECK_INCLUDE_DETAILS = _bool(os.getenv("HEALTHCHECK_INCLUDE_DETAILS"), DEBUG)
+# If true, readiness keeps 200 even when dependencies fail (useful for temporary maintenance windows).
+HEALTHCHECK_FAIL_OPEN = _bool(os.getenv("HEALTHCHECK_FAIL_OPEN"), False)
 
 # === OTP / RATE LIMIT ===
 OTP_PEPPER = os.getenv("OTP_PEPPER")
@@ -508,7 +531,7 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_SSL_REDIRECT = _bool(os.getenv("SECURE_SSL_REDIRECT"), not DEBUG)
 SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0" if DEBUG else "3600"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = _bool(os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS"), True)
-SECURE_HSTS_PRELOAD = _bool(os.getenv("SECURE_HSTS_PRELOAD"), False)
+SECURE_HSTS_PRELOAD = _bool(os.getenv("SECURE_HSTS_PRELOAD"), not DEBUG)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = False

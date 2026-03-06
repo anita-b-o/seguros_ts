@@ -143,7 +143,7 @@ El botón aparece, el backend responde OK pero el usuario no ve cambios | El `fi
 
 ## Checklist de producción
 Tomá `backend/.env.example` como base y completá las variables obligatorias (ver arriba). Además:
-- Base de datos: este proyecto usa SQLite (`backend/db.sqlite3`) por defecto. Si realmente necesitás Postgres, agregá `DB_ENGINE`/`DB_NAME`/... y documentalo, pero las pruebas locales sólo usan el archivo.  
+- Base de datos: SQLite (`backend/db.sqlite3`) sirve para desarrollo rápido, pero no debe considerarse entorno objetivo de producción. Para producción y CI confiable usá PostgreSQL con `DB_ENGINE`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST` y `DB_PORT`. Si corrés tests en SQLite, tené en cuenta que algunas rutas/migraciones históricas fueron pensadas para PostgreSQL.
 - JWT: `JWT_SIGNING_KEY` (o usa `DJANGO_SECRET_KEY`) para tokens válidos.
 - Seguridad: `SESSION_COOKIE_SECURE=true`, `CSRF_COOKIE_SECURE=true`, `SECURE_SSL_REDIRECT=true`, `SECURE_HSTS_SECONDS` alto en prod (por ejemplo `15552000`).
 - Observabilidad: mantener `/metrics` cerrado en producción (no habilitar `ALLOW_METRICS_PUBLIC` salvo que esté protegido por proxy).

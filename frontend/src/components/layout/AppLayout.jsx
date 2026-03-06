@@ -10,7 +10,7 @@ export default function AppLayout() {
 
   useEffect(() => {
     if (!user && status === "idle") {
-      loadMe();
+      loadMe({ silent: true });
     }
   }, [loadMe, status, user]);
 

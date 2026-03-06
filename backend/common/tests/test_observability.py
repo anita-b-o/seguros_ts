@@ -129,3 +129,17 @@ class ObservabilityMiddlewareTests(SimpleTestCase):
         extra = info_mock.call_args.kwargs.get("extra", {})
         self.assertNotIn("payload", extra)
         self.assertNotIn("payload_truncated", extra)
+
+    def test_emits_http_metrics_from_access_log(self):
+        middleware = self._build_middleware(status_code=503)
+        request = self.factory.get("/api/observability")
+        resolver_match = mock.Mock(route="api/observability-route", view_name="observability_view")
+        request.resolver_match = resolver_match
+        with mock.patch("common.middlewares.observe_http_request") as metrics_mock:
+            _ = middleware(request)
+
+        metrics_mock.assert_called_once()
+        kwargs = metrics_mock.call_args.kwargs
+        self.assertEqual(kwargs["method"], "GET")
+        self.assertEqual(kwargs["route"], "api/observability-route")
+        self.assertEqual(kwargs["status_code"], 503)

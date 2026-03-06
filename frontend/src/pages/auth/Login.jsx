@@ -69,9 +69,9 @@ export default function Login() {
         const st = await authApi.googleStatus();
         if (st && typeof st === "object") {
           const enabled = !!(
-            st.google_auth_available ??
-            st.google_login_enabled ??
-            st.google_client_id_configured
+            st.google_login_enabled &&
+            st.google_client_id_configured &&
+            st.google_auth_available
           );
           setGoogleAvail(enabled);
         } else {

@@ -21,7 +21,7 @@ export default function useAuth() {
   const doLogin = useCallback((payload) => dispatch(login(payload)), [dispatch]);
   const doRegister = useCallback((payload) => dispatch(register(payload)), [dispatch]);
   const doGoogleLogin = useCallback((payload) => dispatch(googleLogin(payload)), [dispatch]);
-  const doLoadMe = useCallback(() => dispatch(loadMe()), [dispatch]);
+  const doLoadMe = useCallback((payload) => dispatch(loadMe(payload)), [dispatch]);
 
   const doLogout = useCallback(async () => {
     await dispatch(logout());

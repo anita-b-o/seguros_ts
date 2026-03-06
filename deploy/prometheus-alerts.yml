@@ -1,0 +1,47 @@
+groups:
+  - name: securests-operational-alerts
+    rules:
+      - alert: SecurestsBackendDown
+        expr: up{job="securests-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "securests-backend is down"
+          description: "Prometheus cannot scrape securests-backend for 2 minutes."
+
+      - alert: SecurestsHigh5xxRate
+        expr: sum(rate(http_5xx_app_total[5m])) / clamp_min(sum(rate(http_requests_app_total[5m])), 1) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx rate in API"
+          description: "5xx ratio has been above 5% for at least 10 minutes."
+
+      - alert: SecurestsHighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(http_request_app_duration_seconds_bucket[5m])) by (le)) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency p95"
+          description: "p95 latency has been above 1.5s for at least 10 minutes."
+
+      - alert: SecurestsWebhookNotProcessed
+        expr: increase(webhooks_received_total[15m]) > 0 and increase(webhooks_processed_total[15m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook intake without processing"
+          description: "Webhook requests are received but none are being processed."
+
+      - alert: SecurestsWebhookInvalidSignatureSpike
+        expr: increase(webhooks_invalid_signature_total[15m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spike in invalid webhook signatures"
+          description: "High number of invalid webhook signatures in the last 15 minutes."

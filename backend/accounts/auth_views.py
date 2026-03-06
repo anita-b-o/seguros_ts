@@ -247,13 +247,14 @@ def _send_email_code(email: str, code: str):
     )
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@sancayetano.com")
     try:
-        send_mail(
+        sent_count = send_mail(
             subject,
             message,
             from_email,
             [email],
             fail_silently=False,
         )
+        logger.info("otp_email_sent", extra={"to": _mask_email(email), "sent_count": sent_count})
         return True
     except Exception as exc:  # pragma: no cover - side effect externo
         logger.warning("No se pudo enviar el código por email: %s", exc)
@@ -534,14 +535,22 @@ class PasswordResetRequestView(PublicEndpointMixin, views.APIView):
             "Si no fuiste vos, ignorá este mensaje."
         )
         try:
-            send_mail(
+            sent_count = send_mail(
                 subject,
                 message,
                 None,  # usa DEFAULT_FROM_EMAIL
                 [user.email],
                 fail_silently=False,
             )
-        except Exception:
+            logger.info(
+                "password_reset_email_sent",
+                extra={"user_id": user.id, "to": _mask_email(user.email), "sent_count": sent_count},
+            )
+        except Exception as exc:
+            logger.error(
+                "password_reset_email_failed",
+                extra={"user_id": user.id, "to": _mask_email(user.email), "error": str(exc)},
+            )
             return response.Response({"detail": "No se pudo enviar el email. Revisá la configuración SMTP."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return response.Response({"detail": "Te enviamos un correo con instrucciones."}, status=status.HTTP_200_OK)
