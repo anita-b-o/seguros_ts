@@ -268,7 +268,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       setQuoteError("");
       setVehicleError("");
       setVehicleFieldErrors({});
-      setShowVehicleExtras(Boolean(currentVehicle));
+      setShowVehicleExtras(false);
       setVehicle({
         plate: currentVehicle?.plate || policy?.plate || "",
         make: currentVehicle?.make || "",
