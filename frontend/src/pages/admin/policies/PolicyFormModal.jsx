@@ -190,6 +190,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState("");
   const [showVehicleExtras, setShowVehicleExtras] = useState(false);
+  const [vehicleFieldErrors, setVehicleFieldErrors] = useState({});
 
   const [vehicle, setVehicle] = useState({
     plate: "",
@@ -271,6 +272,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       setQuoteLink("");
       setQuoteError("");
       setVehicleError("");
+      setVehicleFieldErrors({});
     } else {
       setNumber("");
       setProductId("");
@@ -282,6 +284,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       setQuoteLink("");
       setQuoteError("");
       setVehicleError("");
+      setVehicleFieldErrors({});
       setShowVehicleExtras(false);
       setVehicle({
         plate: "",
@@ -418,6 +421,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     e.preventDefault();
     dispatch(clearAdminPoliciesErrors());
     setVehicleError("");
+    setVehicleFieldErrors({});
 
     if (isEdit) {
       await performEditSave();
@@ -453,12 +457,19 @@ export default function PolicyFormModal({ open, onClose, policy }) {
         (key) => !safeStr(vehicle[key]).trim()
       );
       if (missing.length) {
-        setVehicleError("Para adjuntar el vehículo, completá patente, marca, modelo y año.");
+        setVehicleFieldErrors(
+          missing.reduce((acc, key) => {
+            acc[key] = true;
+            return acc;
+          }, {})
+        );
         return;
       } else {
         setVehicleError("");
+        setVehicleFieldErrors({});
         const yearNum = Number(vehicle.year);
         if (!Number.isFinite(yearNum)) {
+          setVehicleFieldErrors({ year: true });
           setVehicleError("El año del vehículo debe ser un número válido.");
           return;
         }
@@ -555,6 +566,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     try {
       const data = await quotesApi.getShare(token);
       setShowVehicleExtras(true);
+      setVehicleFieldErrors({});
       setVehicle((prev) => ({
         ...prev,
         make: data?.make || "",
@@ -892,10 +904,21 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                           Patente
                           <input
                             className="form-input"
-                            value={vehicle.plate}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, plate: e.target.value }))
+                            style={
+                              vehicleFieldErrors.plate
+                                ? {
+                                    borderColor: "#dc2626",
+                                    boxShadow: "0 0 0 3px rgba(220, 38, 38, 0.12)",
+                                  }
+                                : undefined
                             }
+                            value={vehicle.plate}
+                            onChange={(e) => {
+                              setVehicle((prev) => ({ ...prev, plate: e.target.value }));
+                              if (vehicleFieldErrors.plate) {
+                                setVehicleFieldErrors((prev) => ({ ...prev, plate: false }));
+                              }
+                            }}
                             placeholder="AB123CD"
                           />
                         </label>
@@ -904,10 +927,21 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                           Marca
                           <input
                             className="form-input"
-                            value={vehicle.make}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, make: e.target.value }))
+                            style={
+                              vehicleFieldErrors.make
+                                ? {
+                                    borderColor: "#dc2626",
+                                    boxShadow: "0 0 0 3px rgba(220, 38, 38, 0.12)",
+                                  }
+                                : undefined
                             }
+                            value={vehicle.make}
+                            onChange={(e) => {
+                              setVehicle((prev) => ({ ...prev, make: e.target.value }));
+                              if (vehicleFieldErrors.make) {
+                                setVehicleFieldErrors((prev) => ({ ...prev, make: false }));
+                              }
+                            }}
                             placeholder="Toyota"
                           />
                         </label>
@@ -916,10 +950,21 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                           Modelo
                           <input
                             className="form-input"
-                            value={vehicle.model}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, model: e.target.value }))
+                            style={
+                              vehicleFieldErrors.model
+                                ? {
+                                    borderColor: "#dc2626",
+                                    boxShadow: "0 0 0 3px rgba(220, 38, 38, 0.12)",
+                                  }
+                                : undefined
                             }
+                            value={vehicle.model}
+                            onChange={(e) => {
+                              setVehicle((prev) => ({ ...prev, model: e.target.value }));
+                              if (vehicleFieldErrors.model) {
+                                setVehicleFieldErrors((prev) => ({ ...prev, model: false }));
+                              }
+                            }}
                             placeholder="Corolla"
                           />
                         </label>
@@ -928,10 +973,21 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                           Año
                           <input
                             className="form-input"
-                            value={vehicle.year}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, year: e.target.value }))
+                            style={
+                              vehicleFieldErrors.year
+                                ? {
+                                    borderColor: "#dc2626",
+                                    boxShadow: "0 0 0 3px rgba(220, 38, 38, 0.12)",
+                                  }
+                                : undefined
                             }
+                            value={vehicle.year}
+                            onChange={(e) => {
+                              setVehicle((prev) => ({ ...prev, year: e.target.value }));
+                              if (vehicleFieldErrors.year) {
+                                setVehicleFieldErrors((prev) => ({ ...prev, year: false }));
+                              }
+                            }}
                             placeholder="2020"
                             inputMode="numeric"
                           />
