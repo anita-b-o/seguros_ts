@@ -198,12 +198,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     model: "",
     year: "",
     version: "",
-    city: "",
-    usage: "",
-    has_garage: false,
-    is_zero_km: false,
-    has_gnc: false,
-    gnc_amount: "",
   });
   const [vehicleError, setVehicleError] = useState("");
 
@@ -292,12 +286,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
         model: "",
         year: "",
         version: "",
-        city: "",
-        usage: "",
-        has_garage: false,
-        is_zero_km: false,
-        has_gnc: false,
-        gnc_amount: "",
       });
     }
 
@@ -484,19 +472,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
         if (safeStr(vehicle.version).trim()) {
           payloadVehicle.version = safeStr(vehicle.version).trim();
         }
-        if (safeStr(vehicle.city).trim()) payloadVehicle.city = safeStr(vehicle.city).trim();
-        if (safeStr(vehicle.usage).trim()) payloadVehicle.usage = safeStr(vehicle.usage).trim();
-        if (vehicle.has_garage) payloadVehicle.has_garage = true;
-        if (vehicle.is_zero_km) payloadVehicle.is_zero_km = true;
-        if (vehicle.has_gnc) payloadVehicle.has_gnc = true;
-        if (safeStr(vehicle.gnc_amount).trim()) {
-          const gncAmountNum = Number(vehicle.gnc_amount);
-          if (!Number.isFinite(gncAmountNum)) {
-            setVehicleError("El monto de GNC debe ser numérico.");
-            return;
-          }
-          payloadVehicle.gnc_amount = gncAmountNum;
-        }
 
         payload.vehicle = payloadVehicle;
       }
@@ -573,12 +548,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
         model: data?.model || "",
         version: data?.version || "",
         year: data?.year != null ? String(data.year) : "",
-        city: data?.city || "",
-        usage: data?.usage || "",
-        has_garage: Boolean(data?.has_garage),
-        is_zero_km: Boolean(data?.is_zero_km),
-        has_gnc: Boolean(data?.has_gnc),
-        gnc_amount: data?.gnc_amount != null ? String(data.gnc_amount) : "",
       }));
     } catch (e) {
       setQuoteError(e?.response?.data?.detail || "No se pudo cargar la cotización.");
@@ -1003,85 +972,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                             }
                             placeholder="1.6 XEi"
                           />
-                        </label>
-
-                        <label className="form-label" style={{ margin: 0 }}>
-                          Ciudad
-                          <input
-                            className="form-input"
-                            value={vehicle.city}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, city: e.target.value }))
-                            }
-                            placeholder="CABA"
-                          />
-                        </label>
-
-                        <label className="form-label" style={{ margin: 0 }}>
-                          Uso
-                          <input
-                            className="form-input"
-                            value={vehicle.usage}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, usage: e.target.value }))
-                            }
-                            placeholder="Particular"
-                          />
-                        </label>
-
-                        <label className="form-label" style={{ margin: 0 }}>
-                          Monto GNC
-                          <input
-                            className="form-input"
-                            value={vehicle.gnc_amount}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, gnc_amount: e.target.value }))
-                            }
-                            placeholder="4000"
-                            inputMode="numeric"
-                          />
-                        </label>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 12,
-                          marginTop: 10,
-                        }}
-                      >
-                        <label className="form-label" style={{ margin: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={vehicle.has_garage}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, has_garage: e.target.checked }))
-                            }
-                          />{" "}
-                          Tiene garage
-                        </label>
-
-                        <label className="form-label" style={{ margin: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={vehicle.is_zero_km}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, is_zero_km: e.target.checked }))
-                            }
-                          />{" "}
-                          0 km
-                        </label>
-
-                        <label className="form-label" style={{ margin: 0 }}>
-                          <input
-                            type="checkbox"
-                            checked={vehicle.has_gnc}
-                            onChange={(e) =>
-                              setVehicle((prev) => ({ ...prev, has_gnc: e.target.checked }))
-                            }
-                          />{" "}
-                          Tiene GNC
                         </label>
                       </div>
                     </div>
