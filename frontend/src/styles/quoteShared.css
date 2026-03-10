@@ -12,10 +12,7 @@
 }
 
 .quote-shared__hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 24px;
-  align-items: start;
+  display: block;
   margin-bottom: 24px;
 }
 
@@ -42,38 +39,12 @@
   color: #435678;
 }
 
-.quote-shared__metaCard,
 .quote-shared__card {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(11, 48, 104, 0.12);
   border-radius: 24px;
   box-shadow: 0 24px 48px rgba(17, 28, 54, 0.08);
   backdrop-filter: blur(12px);
-}
-
-.quote-shared__metaCard {
-  padding: 20px 22px;
-}
-
-.quote-shared__metaLabel {
-  margin-top: 12px;
-  font-size: 0.76rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #617493;
-}
-
-.quote-shared__metaLabel:first-child {
-  margin-top: 0;
-}
-
-.quote-shared__metaValue {
-  margin-top: 4px;
-  font-size: 1rem;
-  font-weight: 700;
-  color: #092955;
-  word-break: break-word;
 }
 
 .quote-shared__grid {
@@ -193,7 +164,6 @@
 }
 
 @media (max-width: 900px) {
-  .quote-shared__hero,
   .quote-shared__grid,
   .quote-shared__gallery {
     grid-template-columns: 1fr;
@@ -215,7 +185,7 @@
   }
 
   .quote-shared__card,
-  .quote-shared__metaCard {
+  .quote-shared__card {
     padding: 18px;
     border-radius: 20px;
   }

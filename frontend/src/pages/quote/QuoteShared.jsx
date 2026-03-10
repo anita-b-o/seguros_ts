@@ -119,19 +119,6 @@ export default function QuoteShared() {
               Datos cargados por el cliente para revisión comercial.
             </p>
           </div>
-
-          <div className="quote-shared__metaCard">
-            <div className="quote-shared__metaLabel">Token</div>
-            <div className="quote-shared__metaValue">{quote?.token || token}</div>
-            <div className="quote-shared__metaLabel">Creada</div>
-            <div className="quote-shared__metaValue">
-              {formatDate(quote?.created_at)}
-            </div>
-            <div className="quote-shared__metaLabel">Vence</div>
-            <div className="quote-shared__metaValue">
-              {formatDate(quote?.expires_at)}
-            </div>
-          </div>
         </header>
 
         <div className="quote-shared__grid">
