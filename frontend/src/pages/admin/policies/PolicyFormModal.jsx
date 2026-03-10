@@ -256,6 +256,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     usersRequestId.current += 1;
 
     if (isEdit) {
+      const currentVehicle = policy?.vehicle || {};
       setNumber(policy?.number || "");
       setProductId(String(policy?.product_id ?? ""));
       setUserId(getPolicyUserId(policy)); // ✅ robusto: user_id / user.id / user_obj.id
@@ -267,6 +268,14 @@ export default function PolicyFormModal({ open, onClose, policy }) {
       setQuoteError("");
       setVehicleError("");
       setVehicleFieldErrors({});
+      setShowVehicleExtras(Boolean(currentVehicle));
+      setVehicle({
+        plate: currentVehicle?.plate || policy?.plate || "",
+        make: currentVehicle?.make || "",
+        model: currentVehicle?.model || "",
+        year: currentVehicle?.year != null ? String(currentVehicle.year) : "",
+        version: currentVehicle?.version || "",
+      });
     } else {
       setNumber("");
       setProductId("");
@@ -394,6 +403,41 @@ export default function PolicyFormModal({ open, onClose, policy }) {
 
     // ✅ permitir desasignar cliente: si userId === "" mandamos null
     payload.user_id = safeStr(userId).trim() ? Number(userId) : null;
+
+    const hasVehicleInput = Object.values(vehicle).some((val) => safeStr(val).trim());
+    if (hasVehicleInput) {
+      const missing = ["plate", "make", "model", "year"].filter(
+        (key) => !safeStr(vehicle[key]).trim()
+      );
+      if (missing.length) {
+        setVehicleFieldErrors(
+          missing.reduce((acc, key) => {
+            acc[key] = true;
+            return acc;
+          }, {})
+        );
+        setShowVehicleExtras(true);
+        return;
+      }
+
+      const yearNum = Number(vehicle.year);
+      if (!Number.isFinite(yearNum)) {
+        setVehicleFieldErrors({ year: true });
+        setVehicleError("El año del vehículo debe ser un número válido.");
+        setShowVehicleExtras(true);
+        return;
+      }
+
+      payload.vehicle = {
+        plate: safeStr(vehicle.plate).trim(),
+        make: safeStr(vehicle.make).trim(),
+        model: safeStr(vehicle.model).trim(),
+        year: yearNum,
+        ...(safeStr(vehicle.version).trim()
+          ? { version: safeStr(vehicle.version).trim() }
+          : {}),
+      };
+    }
 
     // 1) Guardar cambios primero
     const resSave = await dispatch(patchAdminPolicy({ id: policy.id, payload }));
@@ -774,39 +818,43 @@ export default function PolicyFormModal({ open, onClose, policy }) {
               </div>
             </label>
 
-            {!isEdit && (
+            {
               <>
-                <label className="form-label">
-                  Tipo de seguro
-                  <select
-                    className={`form-input ${getFieldErr("product_id") ? "is-invalid" : ""}`}
-                    value={productId}
-                    onChange={(e) => setProductId(e.target.value)}
-                    disabled={loadingProducts}
-                  >
-                    <option value="">
-                      {loadingProducts ? "Cargando productos…" : "Seleccionar…"}
-                    </option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name || `Producto #${p.id}`}
-                      </option>
-                    ))}
-                  </select>
-                  {getFieldErr("product_id") && (
-                    <div className="field-err">{getFieldErr("product_id")}</div>
-                  )}
-                </label>
+                {!isEdit ? (
+                  <>
+                    <label className="form-label">
+                      Tipo de seguro
+                      <select
+                        className={`form-input ${getFieldErr("product_id") ? "is-invalid" : ""}`}
+                        value={productId}
+                        onChange={(e) => setProductId(e.target.value)}
+                        disabled={loadingProducts}
+                      >
+                        <option value="">
+                          {loadingProducts ? "Cargando productos…" : "Seleccionar…"}
+                        </option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name || `Producto #${p.id}`}
+                          </option>
+                        ))}
+                      </select>
+                      {getFieldErr("product_id") && (
+                        <div className="field-err">{getFieldErr("product_id")}</div>
+                      )}
+                    </label>
 
-                <label className="form-label">
-                  Fecha inicio
-                  <input
-                    type="date"
-                    className="form-input"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                </label>
+                    <label className="form-label">
+                      Fecha inicio
+                      <input
+                        type="date"
+                        className="form-input"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                      />
+                    </label>
+                  </>
+                ) : null}
 
                 <div className="form-label">
                   <button
@@ -978,7 +1026,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
                   </>
                 ) : null}
               </>
-            )}
+            }
 
             <div className="modal-actions">
               <button className="btn-secondary" type="button" onClick={onClose}>
