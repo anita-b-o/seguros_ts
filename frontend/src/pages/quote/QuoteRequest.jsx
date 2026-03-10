@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiPublic } from "@/api";
 import { quotesApi } from "@/services/quotesApi";
 import { carCatalogApi } from "@/services/carCatalogApi";
@@ -19,11 +20,16 @@ function yearsList() {
 const normalizePhone = (v) => String(v || "").replace(/[^\d]/g, "");
 
 export default function QuoteRequest() {
+  const [searchParams] = useSearchParams();
   const years = useMemo(yearsList, []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [shareUrl, setShareUrl] = useState("");
   const [contact, setContact] = useState(CONTACT_FALLBACK);
+  const selectedPlanCode = String(searchParams.get("plan") || "").trim();
+  const selectedPlanName = String(
+    searchParams.get("plan_name") || selectedPlanCode
+  ).trim();
 
   /* =======================
      Campos
@@ -131,6 +137,8 @@ export default function QuoteRequest() {
     setBusy(true);
     try {
       const fd = new FormData();
+      if (selectedPlanCode) fd.append("plan_code", selectedPlanCode);
+      if (selectedPlanName) fd.append("plan_name", selectedPlanName);
       fd.append("whatsapp", normalizePhone(wa));
       fd.append("usage", usage);
       fd.append("make", makeLabel);
@@ -186,6 +194,13 @@ export default function QuoteRequest() {
         <p className="quote-sub">
           Ingresá tus datos y abriremos WhatsApp con tu ficha completa.
         </p>
+
+        {selectedPlanName ? (
+          <div className="quote-plan-banner" aria-label="Plan seleccionado">
+            <span className="quote-plan-banner__label">Plan seleccionado</span>
+            <strong className="quote-plan-banner__value">{selectedPlanName}</strong>
+          </div>
+        ) : null}
 
         {err && <div className="quote-alert">{err}</div>}
 

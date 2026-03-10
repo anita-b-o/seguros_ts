@@ -37,6 +37,30 @@
   text-align: center;
 }
 
+.quote-plan-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(10, 42, 90, 0.05), rgba(10, 42, 90, 0.02));
+  border: 1px solid rgba(10, 42, 90, 0.1);
+}
+
+.quote-plan-banner__label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.quote-plan-banner__value {
+  font-size: 1rem;
+  color: #0a2a5a;
+}
+
 .quote-sub.small {
   margin: 6px 0 16px;
   font-size: 0.95rem;
