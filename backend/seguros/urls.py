@@ -69,9 +69,6 @@ urlpatterns = [
     # Django admin — configurable por .env
     path(settings.ADMIN_URL, admin.site.urls),
 
-    # (Opcional) redirect desde /admin/ → ADMIN_URL
-    path("admin/", _admin_redirect),
-
     # Healthcheck
     path("healthz/", readiness_healthcheck, name="healthcheck"),
     path("healthz", readiness_healthcheck, name="healthcheck-noslash"),
@@ -192,6 +189,10 @@ urlpatterns = [
     path("api/admin/settings", AppSettingsView.as_view(), name="admin-settings"),
     path("api/admin/settings/", AppSettingsView.as_view(), name="admin-settings-slash"),
 ]
+
+# Legacy redirect solo si el admin real ya no vive en /admin/.
+if str(settings.ADMIN_URL).lstrip("/") != "admin/":
+    urlpatterns.insert(1, path("admin/", _admin_redirect))
 
 # Prometheus (solo si se habilita explícitamente o en DEBUG)
 if settings.DEBUG or _env_bool(os.getenv("ALLOW_METRICS_PUBLIC"), False):

@@ -269,7 +269,8 @@ CSRF_TRUSTED_ORIGINS = [
 ROOT_URLCONF = "seguros.urls"
 
 # 🔐 URL del panel de administración (configurable por .env)
-ADMIN_URL = os.getenv("ADMIN_URL", "admin/")
+# Usamos una ruta dedicada para no chocar con /admin/* de la SPA.
+ADMIN_URL = os.getenv("ADMIN_URL", "secure-admin/")
 
 TEMPLATES = [
     {
