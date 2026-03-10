@@ -51,6 +51,7 @@ export default function QuoteShared() {
   const [quote, setQuote] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -186,13 +187,40 @@ export default function QuoteShared() {
           <div className="quote-shared__gallery">
             {photoEntries.map((photo) => (
               <figure key={photo.key} className="quote-shared__photo">
-                <img src={photo.url} alt={photo.label} loading="lazy" />
+                <button
+                  type="button"
+                  className="quote-shared__photoButton"
+                  onClick={() => setSelectedPhoto(photo)}
+                  aria-label={`Ampliar imagen ${photo.label}`}
+                >
+                  <img src={photo.url} alt={photo.label} loading="lazy" />
+                </button>
                 <figcaption>{photo.label}</figcaption>
               </figure>
             ))}
           </div>
         </article>
       </div>
+
+      {selectedPhoto ? (
+        <div className="quote-shared__modal" role="dialog" aria-modal="true">
+          <div className="quote-shared__modalPanel">
+            <button
+              type="button"
+              className="quote-shared__modalClose"
+              onClick={() => setSelectedPhoto(null)}
+              aria-label="Cerrar imagen"
+            >
+              ×
+            </button>
+            <img
+              className="quote-shared__modalImage"
+              src={selectedPhoto.url}
+              alt={selectedPhoto.label}
+            />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
