@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import { apiPublic } from "@/api";
 import { quotesApi } from "@/services/quotesApi";
 import { carCatalogApi } from "@/services/carCatalogApi";
 import AsyncAutocomplete from "@/components/forms/AsyncAutocomplete";
 import "@/styles/quoteForm.css";
 
-const INSURER_WA = (import.meta.env.VITE_WA_INSURER_NUMBER || "").replace(/\D/g, "");
 const INSURER_EMAIL =
   import.meta.env.VITE_INSURER_EMAIL || "no-reply@sancayetano.com";
+const CONTACT_FALLBACK = {
+  whatsapp: import.meta.env.VITE_WA_INSURER_NUMBER || "",
+};
 
 function yearsList() {
   const now = new Date().getFullYear();
@@ -20,6 +23,7 @@ export default function QuoteRequest() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [shareUrl, setShareUrl] = useState("");
+  const [contact, setContact] = useState(CONTACT_FALLBACK);
 
   /* =======================
      Campos
@@ -69,6 +73,23 @@ export default function QuoteRequest() {
     photoRight &&
     photoLeft &&
     !busy;
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { data } = await apiPublic.get("/common/contact-info");
+        if (!mounted) return;
+        setContact((prev) => ({ ...prev, ...data }));
+      } catch {
+        if (!mounted) return;
+        setContact(CONTACT_FALLBACK);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   /* =======================
      API catálogo
@@ -138,9 +159,14 @@ export default function QuoteRequest() {
       setShareUrl(url);
 
       const msg = `Hola, estoy interesado en cotizar mi vehículo. Estos son mis datos: ${url}`;
-      const waLink = INSURER_WA
-        ? `https://wa.me/${INSURER_WA}?text=${encodeURIComponent(msg)}`
+      const insurerWa = String(contact.whatsapp || "").replace(/\D/g, "");
+      const waLink = insurerWa
+        ? `https://wa.me/${insurerWa}?text=${encodeURIComponent(msg)}`
         : "";
+
+      if (!waLink) {
+        throw new Error("No hay un WhatsApp de contacto configurado.");
+      }
 
       window.open(waLink, "_blank", "noopener,noreferrer");
     } catch (e) {
