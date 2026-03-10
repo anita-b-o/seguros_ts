@@ -1,145 +1,135 @@
 .quote-shared {
   min-height: calc(100vh - 160px);
-  padding: 48px 20px 64px;
+  padding: 34px 20px 48px;
   background:
     radial-gradient(circle at top, rgba(9, 48, 107, 0.12), transparent 38%),
     linear-gradient(180deg, #f4f7fb 0%, #eef2f7 100%);
 }
 
 .quote-shared__shell {
-  max-width: 1160px;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
 .quote-shared__hero {
   display: block;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .quote-shared__eyebrow {
-  margin: 0 0 8px;
-  font-size: 0.82rem;
+  margin: 0 0 6px;
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: #617493;
 }
 
 .quote-shared__title {
   margin: 0;
-  font-size: clamp(2rem, 4vw, 3.2rem);
-  line-height: 0.96;
+  font-size: clamp(1.7rem, 3.2vw, 2.5rem);
+  line-height: 0.98;
   color: #082248;
 }
 
-.quote-shared__subtitle {
-  max-width: 58ch;
-  margin: 14px 0 0;
-  font-size: 1.02rem;
-  color: #435678;
-}
-
 .quote-shared__card {
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(11, 48, 104, 0.12);
-  border-radius: 24px;
-  box-shadow: 0 24px 48px rgba(17, 28, 54, 0.08);
-  backdrop-filter: blur(12px);
-}
-
-.quote-shared__card {
-  padding: 24px;
+  border-radius: 20px;
+  box-shadow: 0 14px 30px rgba(17, 28, 54, 0.06);
+  backdrop-filter: blur(10px);
+  padding: 18px;
 }
 
 .quote-shared__detailsCard {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .quote-shared__card h2 {
-  margin: 0 0 20px;
-  font-size: 1.15rem;
+  margin: 0 0 14px;
+  font-size: 1rem;
   color: #082248;
 }
 
 .quote-shared__facts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
   margin: 0;
 }
 
 .quote-shared__facts div {
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: #f5f7fb;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: #f7f9fc;
   border: 1px solid rgba(11, 48, 104, 0.08);
 }
 
 .quote-shared__facts dt {
-  margin: 0 0 6px;
-  font-size: 0.8rem;
+  margin: 0 0 4px;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #617493;
 }
 
 .quote-shared__facts dd {
   margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
+  font-size: 0.92rem;
+  font-weight: 600;
   color: #0b2b59;
-  line-height: 1.35;
+  line-height: 1.28;
   word-break: break-word;
 }
 
 .quote-shared__galleryCard {
-  padding-top: 22px;
+  padding-top: 16px;
 }
 
 .quote-shared__sectionHead {
   display: flex;
   justify-content: space-between;
   align-items: end;
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 .quote-shared__photoCount {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: 999px;
   background: #e8eef8;
   color: #183760;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   font-weight: 700;
 }
 
 .quote-shared__gallery {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .quote-shared__photo {
   margin: 0;
   overflow: hidden;
-  border-radius: 20px;
-  background: #edf2f8;
+  border-radius: 16px;
+  background: #f1f5fa;
   border: 1px solid rgba(11, 48, 104, 0.08);
 }
 
 .quote-shared__photo img {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   background: #dfe6f0;
 }
 
 .quote-shared__photo figcaption {
-  padding: 12px 14px;
-  font-size: 0.95rem;
-  font-weight: 700;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
   color: #0c2b57;
 }
 
@@ -161,12 +151,12 @@
 }
 
 @media (max-width: 900px) {
-  .quote-shared__gallery {
-    grid-template-columns: 1fr;
+  .quote-shared__facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .quote-shared__facts {
-    grid-template-columns: 1fr;
+  .quote-shared__gallery {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .quote-shared__sectionHead {
@@ -177,12 +167,16 @@
 
 @media (max-width: 640px) {
   .quote-shared {
-    padding: 28px 14px 44px;
+    padding: 24px 14px 40px;
   }
 
-  .quote-shared__card,
+  .quote-shared__facts,
+  .quote-shared__gallery {
+    grid-template-columns: 1fr;
+  }
+
   .quote-shared__card {
-    padding: 18px;
-    border-radius: 20px;
+    padding: 16px;
+    border-radius: 18px;
   }
 }
