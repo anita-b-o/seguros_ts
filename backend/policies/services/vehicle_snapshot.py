@@ -33,15 +33,13 @@ def _merge_snapshot_payload(payload=None, source_vehicle=None):
 def _can_overwrite_snapshot(policy, *, overwrite):
     if not overwrite:
         return False
-    if getattr(policy, "is_active", False) or getattr(policy, "is_suspended", False):
-        return False
     return True
 
 
 def ensure_policy_vehicle_snapshot(policy, *, source_vehicle=None, payload=None, overwrite=False):
     """
     Asegura el snapshot contractual (PolicyVehicle) para una póliza.
-    No sobreescribe snapshots existentes salvo overwrite=True y póliza no activa.
+    No sobreescribe snapshots existentes salvo overwrite=True.
     """
     if policy is None:
         raise ValidationError({"vehicle": "Falta la póliza para generar el vehículo contractual."})
