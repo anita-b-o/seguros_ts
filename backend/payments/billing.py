@@ -18,6 +18,7 @@ from django.utils import timezone
 from audit.helpers import audit_log, snapshot_entity
 from common.models import AppSettings
 from policies.models import Policy
+from policies.billing import compute_term_end_date
 
 from .models import BillingPeriod, Payment
 
@@ -148,11 +149,10 @@ def get_or_create_current_period(policy: Policy, *, now: Optional[date] = None) 
     period_start = _policy_period_start(policy, today)
     if not period_start:
         return None
-    settings = AppSettings.get_solo()
     cycle = _cycle_dates_from_window(
         period_start,
-        payment_window_days=getattr(settings, "payment_window_days", 5) or 5,
-        display_offset_days=getattr(settings, "client_expiration_offset_days", 0) or 0,
+        payment_window_days=policy.get_effective_payment_window_days(),
+        display_offset_days=policy.get_effective_client_expiration_offset_days(),
     )
     period_end = cycle["period_end"]
     amount = _policy_monthly_amount(policy)
@@ -262,12 +262,24 @@ def reactivate_policy_if_applicable(policy: Policy) -> bool:
     before = snapshot_entity(policy)
     today = timezone.localdate()
     settings_obj = AppSettings.get_solo()
-    term_months = int(getattr(settings_obj, "default_term_months", 0) or 0)
-    end_date = _add_months(today, term_months) if term_months > 0 else policy.end_date
+    term_months = max(1, int(getattr(settings_obj, "default_term_months", 0) or 0))
+    end_date = compute_term_end_date(today, term_months) if term_months > 0 else policy.end_date
     policy.status = "active"
     policy.start_date = today
     policy.end_date = end_date
-    policy.save(update_fields=["status", "start_date", "end_date", "updated_at"])
+    policy.apply_settings_snapshot(settings_obj=settings_obj)
+    policy.save(
+        update_fields=[
+            "status",
+            "start_date",
+            "end_date",
+            "default_term_months_snapshot",
+            "payment_window_days_snapshot",
+            "client_expiration_offset_days_snapshot",
+            "policy_adjustment_window_days_snapshot",
+            "updated_at",
+        ]
+    )
     stale_periods = (
         BillingPeriod.objects.filter(policy=policy)
         .exclude(status=BillingPeriod.Status.PAID)

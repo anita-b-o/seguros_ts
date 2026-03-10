@@ -8,6 +8,7 @@ from datetime import date, timedelta
 
 from django.db import IntegrityError
 from django.db.models import Case, Count, IntegerField, Prefetch, Q, Value, When
+from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -28,6 +29,7 @@ from payments.serializers import ReceiptSerializer
 from payments.utils import generate_receipt_pdf
 
 from .access import policy_scope_queryset
+from .billing import compute_term_end_date
 from .models import Policy, PolicyVehicle
 from .serializers import (
     AdminPolicyCreateSerializer,
@@ -139,7 +141,9 @@ def _policy_timeline(policy, *, settings_obj=None, period=None):
     adjustment_from = adjustment_to = None
     if settings_obj:
         try:
-            window_days = int(getattr(settings_obj, "policy_adjustment_window_days", 0) or 0)
+            window_days = int(
+                policy.get_effective_policy_adjustment_window_days(settings_obj=settings_obj) or 0
+            )
         except Exception:
             window_days = 0
 
@@ -578,6 +582,50 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         serializer = ReceiptSerializer(page, many=True, context={"request": request})
         return paginator.get_paginated_response(serializer.data)
 
+    @action(detail=True, methods=["get"], url_path=r"receipts/(?P<receipt_id>\d+)/pdf")
+    def receipt_pdf(self, request, pk=None, receipt_id=None):
+        """
+        GET /api/policies/<pk>/receipts/<receipt_id>/pdf
+        Descarga autenticada del PDF para evitar depender de /media en frontend.
+        """
+        policy = self.get_object()
+        self.check_object_permissions(request, policy)
+
+        if getattr(policy, "is_deleted", False) and not request.user.is_staff:
+            return Response({"detail": "No encontrada."}, status=404)
+
+        receipt = Receipt.objects.filter(policy=policy, pk=receipt_id).first()
+        if not receipt:
+            return Response({"detail": "Comprobante no encontrado."}, status=404)
+
+        if not receipt.file:
+            return Response({"detail": "El comprobante no tiene archivo PDF asociado."}, status=404)
+
+        try:
+            fh = receipt.file.open("rb")
+        except Exception:
+            return Response({"detail": "No se pudo abrir el archivo del comprobante."}, status=500)
+
+        try:
+            signature = fh.read(5)
+            fh.seek(0)
+            if signature != b"%PDF-":
+                fh.close()
+                return Response(
+                    {"detail": "El archivo del comprobante no es un PDF válido."},
+                    status=422,
+                )
+
+            policy_number = getattr(policy, "number", None) or str(policy.id)
+            filename = f"comprobante_{policy_number}_{receipt.id}.pdf"
+            return FileResponse(fh, as_attachment=True, filename=filename, content_type="application/pdf")
+        except Exception:
+            try:
+                fh.close()
+            except Exception:
+                pass
+            return Response({"detail": "No se pudo leer el PDF del comprobante."}, status=500)
+
     @action(detail=False, methods=["post"], url_path="claim")
     def claim(self, request):
         number = (request.data.get("number") or request.data.get("code") or "").strip()
@@ -677,7 +725,7 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
                 term_months = 3
             # En ajuste, la nueva vigencia arranca en el vencimiento anterior (no en "hoy")
             new_start = prev_end
-            new_end = _add_months(prev_end, term_months)
+            new_end = compute_term_end_date(prev_end, term_months)
             data["start_date"] = new_start
             data["end_date"] = new_end
 
@@ -686,14 +734,25 @@ class PolicyBaseViewSet(viewsets.ModelViewSet):
         if should_override_dates and new_start and new_end:
             instance.start_date = new_start
             instance.end_date = new_end
-            instance.save(update_fields=["start_date", "end_date", "updated_at"])
+            instance.apply_settings_snapshot(settings_obj=settings_obj)
+            instance.save(
+                update_fields=[
+                    "start_date",
+                    "end_date",
+                    "default_term_months_snapshot",
+                    "payment_window_days_snapshot",
+                    "client_expiration_offset_days_snapshot",
+                    "policy_adjustment_window_days_snapshot",
+                    "updated_at",
+                ]
+            )
 
 
 class PolicyViewSet(PolicyBaseViewSet):
     def get_permissions(self):
         if self.action in ["my", "my_dashboard", "claim"]:
             return [permissions.IsAuthenticated()]
-        if self.action in ["retrieve", "receipts", "refresh", "billing_current"]:
+        if self.action in ["retrieve", "receipts", "receipt_pdf", "refresh", "billing_current"]:
             return [permissions.IsAuthenticated(), IsOwnerOrAdmin()]
         if self.action in ["list", "create", "update", "partial_update", "destroy"]:
             return [permissions.IsAdminUser()]

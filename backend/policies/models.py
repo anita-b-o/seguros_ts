@@ -9,6 +9,7 @@ from django.db import models
 from django.utils import timezone
 
 from accounts.models import User
+from common.models import AppSettings
 from products.models import Product
 
 
@@ -67,6 +68,10 @@ class Policy(models.Model):
     status = models.CharField(max_length=20, choices=STATUS, default=Status.ACTIVE)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    default_term_months_snapshot = models.PositiveIntegerField(null=True, blank=True)
+    payment_window_days_snapshot = models.PositiveIntegerField(null=True, blank=True)
+    client_expiration_offset_days_snapshot = models.PositiveIntegerField(null=True, blank=True)
+    policy_adjustment_window_days_snapshot = models.PositiveIntegerField(null=True, blank=True)
     claim_code = models.CharField(max_length=20, null=True, blank=True, unique=True)
     holder_dni = models.CharField(max_length=20, null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -124,6 +129,66 @@ class Policy(models.Model):
                     {"vehicle": "El vehículo debe pertenecer al titular de la póliza."}
                 )
 
+    def _resolve_settings_obj(self, settings_obj=None):
+        return settings_obj or AppSettings.get_solo()
+
+    def get_effective_default_term_months(self, settings_obj=None) -> int:
+        months = self.default_term_months_snapshot
+        if months is None:
+            months = getattr(self._resolve_settings_obj(settings_obj), "default_term_months", 3)
+        return max(1, int(months or 3))
+
+    def get_effective_payment_window_days(self, settings_obj=None) -> int:
+        days = self.payment_window_days_snapshot
+        if days is None:
+            days = getattr(self._resolve_settings_obj(settings_obj), "payment_window_days", 5)
+        return max(1, int(days or 5))
+
+    def get_effective_client_expiration_offset_days(self, settings_obj=None) -> int:
+        days = self.client_expiration_offset_days_snapshot
+        if days is None:
+            days = getattr(
+                self._resolve_settings_obj(settings_obj),
+                "client_expiration_offset_days",
+                0,
+            )
+        return max(0, int(days or 0))
+
+    def get_effective_policy_adjustment_window_days(self, settings_obj=None) -> int:
+        days = self.policy_adjustment_window_days_snapshot
+        if days is None:
+            days = getattr(
+                self._resolve_settings_obj(settings_obj),
+                "policy_adjustment_window_days",
+                0,
+            )
+        return max(0, int(days or 0))
+
+    def get_settings_snapshot(self, settings_obj=None) -> dict:
+        resolved = self._resolve_settings_obj(settings_obj)
+        return {
+            "default_term_months_snapshot": max(
+                1, int(getattr(resolved, "default_term_months", 3) or 3)
+            ),
+            "payment_window_days_snapshot": max(
+                1, int(getattr(resolved, "payment_window_days", 5) or 5)
+            ),
+            "client_expiration_offset_days_snapshot": max(
+                0, int(getattr(resolved, "client_expiration_offset_days", 0) or 0)
+            ),
+            "policy_adjustment_window_days_snapshot": max(
+                0, int(getattr(resolved, "policy_adjustment_window_days", 0) or 0)
+            ),
+        }
+
+    def apply_settings_snapshot(self, settings_obj=None, *, save: bool = False):
+        snapshot = self.get_settings_snapshot(settings_obj=settings_obj)
+        for field, value in snapshot.items():
+            setattr(self, field, value)
+        if save and self.pk:
+            self.save(update_fields=[*snapshot.keys(), "updated_at"])
+        return snapshot
+
     # ----------------------------
     # Soft delete helpers
     # ----------------------------
@@ -176,12 +241,11 @@ class Policy(models.Model):
         window_days = 0
         early_due_days = 0
 
-        if settings_obj:
-            window_days = int(getattr(settings_obj, "payment_window_days", 0) or 0)
-            early_due_days = getattr(settings_obj, "client_expiration_offset_days", None)
-            if early_due_days is None:
-                early_due_days = getattr(settings_obj, "payment_early_due_days", 0) or 0
-            early_due_days = int(early_due_days or 0)
+        if settings_obj or self.payment_window_days_snapshot is not None:
+            window_days = self.get_effective_payment_window_days(settings_obj=settings_obj)
+            early_due_days = self.get_effective_client_expiration_offset_days(
+                settings_obj=settings_obj
+            )
 
         # Fallback de emergencia para no romper UI si falta settings/campo
         if window_days <= 0:

@@ -7,21 +7,9 @@ from common.models import AppSettings
 from payments.models import BillingPeriod
 from products.models import Product
 from policies.models import Policy
+from policies.billing import compute_term_end_date
 
 User = get_user_model()
-
-
-def add_months(start: date, months: int) -> date:
-    year = start.year + (start.month - 1 + months) // 12
-    month = (start.month - 1 + months) % 12 + 1
-    # cap day to last day of target month
-    from calendar import monthrange
-
-    last_day = monthrange(year, month)[1]
-    day = min(start.day, last_day)
-    return date(year, month, day)
-
-
 class AdminPolicyAdjustmentAndListBehaviorTests(APITestCase):
     def setUp(self):
         self.admin = User.objects.create_user(
@@ -85,7 +73,12 @@ class AdminPolicyAdjustmentAndListBehaviorTests(APITestCase):
             status="active",
             start_date=date.today() - timedelta(days=60),
             end_date=prev_end,
+            default_term_months_snapshot=3,
+            policy_adjustment_window_days_snapshot=10,
         )
+
+        settings.default_term_months = 6
+        settings.save(update_fields=["default_term_months"])
 
         resp = self.client.patch(
             f"/api/admin/policies/policies/{policy.id}",
@@ -96,4 +89,5 @@ class AdminPolicyAdjustmentAndListBehaviorTests(APITestCase):
 
         policy.refresh_from_db()
         self.assertEqual(policy.start_date, prev_end)
-        self.assertEqual(policy.end_date, add_months(prev_end, 3))
+        self.assertEqual(policy.end_date, compute_term_end_date(prev_end, 6))
+        self.assertEqual(policy.default_term_months_snapshot, 6)
