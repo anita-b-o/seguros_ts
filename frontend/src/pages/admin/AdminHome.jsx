@@ -1,5 +1,6 @@
 // frontend/src/pages/admin/AdminHome.jsx
 import { useEffect, useMemo, useState } from "react";
+import { api } from "@/api";
 import useAuth from "@/hooks/useAuth";
 import { adminSettingsApi } from "@/services/adminSettingsApi";
 import { accountApi } from "@/services/accountApi";
@@ -37,13 +38,8 @@ const CONTACT_FALLBACK = {
   schedule: "Lun a Vie 9:00 a 18:00",
 };
 
-function normalizeContactFromSettings(settings) {
-  // tolerante: { contact_info: {...} } o plano
-  const c =
-    settings?.contact_info && typeof settings.contact_info === "object"
-      ? settings.contact_info
-      : settings || {};
-
+function normalizeContact(payload) {
+  const c = payload || {};
   return {
     whatsapp: c.whatsapp ?? CONTACT_FALLBACK.whatsapp,
     email: c.email ?? CONTACT_FALLBACK.email,
@@ -53,25 +49,7 @@ function normalizeContactFromSettings(settings) {
   };
 }
 
-function buildContactPatchPayload(settings, contact) {
-  // si el backend maneja contact_info, actualizamos ahí (sin pisar otros settings)
-  const usesNested =
-    settings?.contact_info && typeof settings.contact_info === "object";
-
-  if (usesNested) {
-    return {
-      contact_info: {
-        ...settings.contact_info,
-        whatsapp: contact.whatsapp,
-        email: contact.email,
-        address: contact.address,
-        map_embed_url: contact.map_embed_url,
-        schedule: contact.schedule,
-      },
-    };
-  }
-
-  // fallback: campos planos
+function buildContactPatchPayload(contact) {
   return {
     whatsapp: contact.whatsapp,
     email: contact.email,
@@ -144,9 +122,6 @@ export default function AdminHome() {
     setDefaultTermMonths(form.default_term_months);
     setPolicyAdjustmentWindowDays(form.policy_adjustment_window_days);
 
-    // inicializar contacto desde settings
-    setContact(normalizeContactFromSettings(settings));
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.updated_at, isAdmin]);
 
@@ -186,27 +161,41 @@ export default function AdminHome() {
     })();
   }, [isAdmin]);
 
-  // Cargar settings cuando entro a Preferencias o Contacto
+  // Cargar settings cuando entro a Preferencias
   useEffect(() => {
     if (!isAdmin) return;
-    if (tab !== "preferencias" && tab !== "contacto") return;
+    if (tab !== "preferencias") return;
 
     (async () => {
       setLoadingSettings(true);
       setSettingsErr("");
       setSettingsMsg("");
-      setContactErr("");
-      setContactMsg("");
       try {
         const data = await adminSettingsApi.get();
         setSettings(data);
-        setContact(normalizeContactFromSettings(data));
       } catch (e) {
         setSettings(null);
         setSettingsErr("No se pudieron cargar las preferencias.");
-        setContact(CONTACT_FALLBACK);
       } finally {
         setLoadingSettings(false);
+      }
+    })();
+  }, [tab, isAdmin]);
+
+  // Cargar contacto cuando entro a Contacto
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (tab !== "contacto") return;
+
+    (async () => {
+      setContactErr("");
+      setContactMsg("");
+      try {
+        const { data } = await api.get("/common/contact-info/");
+        setContact(normalizeContact(data));
+      } catch (e) {
+        setContact(CONTACT_FALLBACK);
+        setContactErr("No se pudieron cargar los datos de contacto.");
       }
     })();
   }, [tab, isAdmin]);
@@ -306,10 +295,9 @@ export default function AdminHome() {
 
     setSavingContact(true);
     try {
-      const payload = buildContactPatchPayload(settings || {}, contact);
-      const data = await adminSettingsApi.patch(payload);
-      setSettings(data);
-      setContact(normalizeContactFromSettings(data));
+      const payload = buildContactPatchPayload(contact);
+      const { data } = await api.patch("/common/contact-info/", payload);
+      setContact(normalizeContact(data));
       setContactMsg("Datos de contacto actualizados.");
     } catch (e) {
       setContactErr("No se pudieron guardar los datos de contacto.");
