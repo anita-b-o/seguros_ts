@@ -7,6 +7,9 @@ import useAuth from "@/hooks/useAuth";
 export default function AppLayout() {
   const { loadMe, status, user } = useAuth();
   const location = useLocation();
+  const isAdminRoute = location.pathname.startsWith("/admin");
+  const isQuoteSharedRoute = location.pathname.startsWith("/quote/share/");
+  const showChrome = !isQuoteSharedRoute;
 
   useEffect(() => {
     if (!user && status === "idle") {
@@ -16,11 +19,11 @@ export default function AppLayout() {
 
   return (
     <div className="app-shell">
-      <Navbar />
-      <main id="main">
+      {showChrome ? <Navbar /> : null}
+      <main id="main" className="app-main">
         <Outlet />
       </main>
-      {!location.pathname.startsWith("/admin") ? <Footer /> : null}
+      {showChrome && !isAdminRoute ? <Footer /> : null}
     </div>
   );
 }
