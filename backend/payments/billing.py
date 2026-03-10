@@ -227,7 +227,7 @@ def ensure_current_billing_period(policy: Policy, *, now: Optional[date] = None)
     (reactiva si corresponde y la póliza no está cancelada).
     """
     today = now or timezone.localdate()
-    if policy.status not in ("cancelled", "inactive") and policy.status != "active":
+    if policy.status not in ("cancelled", "inactive", "suspended") and policy.status != "active":
         reactivate_policy_if_applicable(policy)
     period = get_or_create_current_period(policy, now=today)
     if not period:
@@ -255,7 +255,7 @@ def _expire_policy_if_applicable(policy: Policy) -> bool:
 
 
 def reactivate_policy_if_applicable(policy: Policy) -> bool:
-    if policy.status in ("cancelled", "inactive"):
+    if policy.status in ("cancelled", "inactive", "suspended"):
         return False
     if policy.status == "active":
         return False
