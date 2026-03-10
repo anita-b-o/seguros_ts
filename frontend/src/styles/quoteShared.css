@@ -47,15 +47,12 @@
   backdrop-filter: blur(12px);
 }
 
-.quote-shared__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px;
-  margin-bottom: 24px;
-}
-
 .quote-shared__card {
   padding: 24px;
+}
+
+.quote-shared__detailsCard {
+  margin-bottom: 24px;
 }
 
 .quote-shared__card h2 {
@@ -164,7 +161,6 @@
 }
 
 @media (max-width: 900px) {
-  .quote-shared__grid,
   .quote-shared__gallery {
     grid-template-columns: 1fr;
   }

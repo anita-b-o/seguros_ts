@@ -115,73 +115,62 @@ export default function QuoteShared() {
             <h1 className="quote-shared__title">
               {quote?.plan_name || "Cotización de vehículo"}
             </h1>
-            <p className="quote-shared__subtitle">
-              Datos cargados por el cliente para revisión comercial.
-            </p>
           </div>
         </header>
 
-        <div className="quote-shared__grid">
-          <article className="quote-shared__card">
-            <h2>Vehículo</h2>
-            <dl className="quote-shared__facts">
-              <div>
-                <dt>Marca</dt>
-                <dd>{quote?.make || "No informado"}</dd>
-              </div>
-              <div>
-                <dt>Modelo</dt>
-                <dd>{quote?.model || "No informado"}</dd>
-              </div>
-              <div>
-                <dt>Versión</dt>
-                <dd>{quote?.version || "No informado"}</dd>
-              </div>
-              <div>
-                <dt>Año</dt>
-                <dd>{quote?.year || "No informado"}</dd>
-              </div>
-              <div>
-                <dt>Localidad</dt>
-                <dd>{quote?.city || "No informado"}</dd>
-              </div>
-              <div>
-                <dt>Uso</dt>
-                <dd>{formatUsage(quote?.usage)}</dd>
-              </div>
-            </dl>
-          </article>
-
-          <article className="quote-shared__card">
-            <h2>Condiciones</h2>
-            <dl className="quote-shared__facts">
-              <div>
-                <dt>WhatsApp del cliente</dt>
-                <dd>{formatPhone(quote?.phone)}</dd>
-              </div>
-              <div>
-                <dt>Cochera</dt>
-                <dd>{yesNo(quote?.has_garage)}</dd>
-              </div>
-              <div>
-                <dt>GNC</dt>
-                <dd>{yesNo(quote?.has_gnc)}</dd>
-              </div>
-              <div>
-                <dt>Monto GNC</dt>
-                <dd>
-                  {quote?.has_gnc && quote?.gnc_amount
-                    ? `$ ${quote.gnc_amount}`
-                    : "No aplica"}
-                </dd>
-              </div>
-              <div>
-                <dt>Plan</dt>
-                <dd>{quote?.plan_name || quote?.plan_code || "Sin plan"}</dd>
-              </div>
-            </dl>
-          </article>
-        </div>
+        <article className="quote-shared__card quote-shared__detailsCard">
+          <h2>Datos de la cotización</h2>
+          <dl className="quote-shared__facts">
+            <div>
+              <dt>Marca</dt>
+              <dd>{quote?.make || "No informado"}</dd>
+            </div>
+            <div>
+              <dt>Modelo</dt>
+              <dd>{quote?.model || "No informado"}</dd>
+            </div>
+            <div>
+              <dt>Versión</dt>
+              <dd>{quote?.version || "No informado"}</dd>
+            </div>
+            <div>
+              <dt>Año</dt>
+              <dd>{quote?.year || "No informado"}</dd>
+            </div>
+            <div>
+              <dt>Localidad</dt>
+              <dd>{quote?.city || "No informado"}</dd>
+            </div>
+            <div>
+              <dt>Uso</dt>
+              <dd>{formatUsage(quote?.usage)}</dd>
+            </div>
+            <div>
+              <dt>WhatsApp del cliente</dt>
+              <dd>{formatPhone(quote?.phone)}</dd>
+            </div>
+            <div>
+              <dt>Cochera</dt>
+              <dd>{yesNo(quote?.has_garage)}</dd>
+            </div>
+            <div>
+              <dt>GNC</dt>
+              <dd>{yesNo(quote?.has_gnc)}</dd>
+            </div>
+            <div>
+              <dt>Monto GNC</dt>
+              <dd>
+                {quote?.has_gnc && quote?.gnc_amount
+                  ? `$ ${quote.gnc_amount}`
+                  : "No aplica"}
+              </dd>
+            </div>
+            <div>
+              <dt>Plan</dt>
+              <dd>{quote?.plan_name || quote?.plan_code || "Sin plan"}</dd>
+            </div>
+          </dl>
+        </article>
 
         <article className="quote-shared__card quote-shared__galleryCard">
           <div className="quote-shared__sectionHead">
