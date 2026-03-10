@@ -444,6 +444,10 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     if (resSave.meta.requestStatus !== "fulfilled") return;
 
     await dispatch(fetchAdminPolicies({ page }));
+    pushToast({
+      type: "success",
+      message: payload.vehicle ? "Póliza y vehículo actualizados." : "Póliza actualizada.",
+    });
 
     // 3) Cerrar modal solo si todo salió bien
     onClose?.();
@@ -524,6 +528,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     const res = await dispatch(createAdminPolicy(payload));
     if (res.meta.requestStatus === "fulfilled") {
       await dispatch(fetchAdminPolicies({ page }));
+      pushToast({ type: "success", message: "Póliza creada." });
       onClose?.();
       setNumber("");
       setProductId("");
