@@ -80,6 +80,8 @@ class QuoteShareCreateSerializer(serializers.ModelSerializer):
 
 
 class QuoteShareCreateMultipartSerializer(serializers.Serializer):
+    plan_code = serializers.CharField(required=False, allow_blank=True, default="")
+    plan_name = serializers.CharField(required=False, allow_blank=True, default="")
     whatsapp = serializers.CharField()
     usage = serializers.CharField()
     make = serializers.CharField()

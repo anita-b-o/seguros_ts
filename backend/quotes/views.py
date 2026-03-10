@@ -87,6 +87,8 @@ class QuoteShareCreateView(PublicEndpointMixin, APIView):
             data = serializer.validated_data
             obj = QuoteShare(
                 token=None,
+                plan_code=data.get("plan_code", ""),
+                plan_name=data.get("plan_name", ""),
                 phone=data["whatsapp"],
                 make=data["make"],
                 model=data["model"],
