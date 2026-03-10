@@ -10,12 +10,13 @@ from rest_framework.exceptions import APIException
 from rest_framework.exceptions import APIException, ValidationError
 
 from accounts.models import User
+from common.models import AppSettings
 from payments.billing import ensure_current_billing_period, get_current_billing_period
 from payments.models import BillingPeriod, Payment
 from products.models import Product
 from vehicles.models import Vehicle
 
-from .billing import ensure_policy_end_date
+from .billing import compute_term_end_date, ensure_policy_end_date
 from .models import Policy, PolicyVehicle
 from .services.vehicle_snapshot import ensure_policy_vehicle_snapshot
 
@@ -315,21 +316,14 @@ class PolicySerializer(serializers.ModelSerializer):
 
         settings_obj = getattr(self, "_settings_obj_cache", None)
         if settings_obj is None:
-            try:
-                from common.models import AppSettings
-
-                settings_obj = AppSettings.get_solo()
-            except Exception:
-                settings_obj = None
+            settings_obj = None
             self._settings_obj_cache = settings_obj
-
-        if not settings_obj:
-            cache[key] = (None, None)
-            return cache[key]
 
         end = getattr(obj, "end_date", None)
         try:
-            window_days = int(getattr(settings_obj, "policy_adjustment_window_days", 0) or 0)
+            window_days = int(
+                obj.get_effective_policy_adjustment_window_days(settings_obj=settings_obj) or 0
+            )
         except Exception:
             window_days = 0
 
@@ -410,6 +404,7 @@ class PolicySerializer(serializers.ModelSerializer):
                 validated_data["number"] = self._generate_temp_number()
 
             policy = super().create(validated_data)
+            policy.apply_settings_snapshot(save=True)
 
             if auto_number:
                 final_number = self._generate_number_from_id(policy.id)
@@ -703,7 +698,14 @@ class AdminPolicyCreateSerializer(PolicySerializer):
         return date(year, month, min(start.day, last_day))
 
     def _compute_end_date(self, start_date: date) -> date:
-        return self._add_months(start_date, 3)
+        try:
+            settings_obj = AppSettings.get_solo()
+            months = int(getattr(settings_obj, "default_term_months", 0) or 0)
+        except Exception:
+            months = 0
+        if months <= 0:
+            months = 3
+        return compute_term_end_date(start_date, months)
 
     def validate(self, attrs):
         data = super().validate(attrs)

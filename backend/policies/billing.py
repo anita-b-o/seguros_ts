@@ -32,17 +32,26 @@ def _add_months(start: date, months: int) -> date:
     return date(year, month, min(start.day, last_day))
 
 
+def compute_term_end_date(start: date, months: int) -> date | None:
+    """
+    Computes an inclusive end date for a term counted by calendar months.
+    Example: start=2026-01-01, months=3 -> end=2026-03-31.
+    """
+    if not start or months <= 0:
+        return None
+    return _add_months(start, months) - timedelta(days=1)
+
+
 def ensure_policy_end_date(policy: Policy) -> bool:
     """
     Aplica la duración por defecto si la póliza ya tiene una fecha de inicio pero no una de fin.
     """
     if not policy.start_date or policy.end_date:
         return False
-    settings_obj = AppSettings.get_solo()
-    months = getattr(settings_obj, "default_term_months", 0) or 0
+    months = policy.get_effective_default_term_months()
     if months <= 0:
         return False
-    computed = _add_months(policy.start_date, months)
+    computed = compute_term_end_date(policy.start_date, months)
     if not computed:
         return False
     policy.end_date = computed
@@ -153,10 +162,9 @@ def months_duration_for_policy(policy: Policy) -> int:
     Derives months of coverage. Prefers explicit end_date/start_date; falls back
     to app default term if the end_date is missing.
     """
-    settings_obj = AppSettings.get_solo()
     if policy.start_date and policy.end_date:
         return max(1, _months_between(policy.start_date, policy.end_date))
-    return getattr(settings_obj, "default_term_months", 3) or 3
+    return policy.get_effective_default_term_months()
 
 
 def _is_installment_paid(installment: PolicyInstallment) -> bool:
@@ -178,7 +186,6 @@ def sync_installments_preserving_paid(
     installments are renumbered out of the way before inserts occur to avoid
     UNIQUE constraint failures.
     """
-    settings_obj = AppSettings.get_solo()
     if not policy.start_date:
         return policy.installments.all()
 
@@ -187,8 +194,8 @@ def sync_installments_preserving_paid(
         months = 0
     amount = monthly_amount if monthly_amount is not None else (policy.premium or Decimal("0"))
 
-    window_days = max(1, getattr(settings_obj, "payment_window_days", 5) or 5)
-    display_offset = max(0, getattr(settings_obj, "client_expiration_offset_days", 0) or 0)
+    window_days = policy.get_effective_payment_window_days()
+    display_offset = policy.get_effective_client_expiration_offset_days()
 
     expected_periods: dict[date, dict] = {}
     for idx in range(months):
@@ -350,8 +357,10 @@ def current_payment_cycle(
         return None
     today = today or date.today()
     months_to_generate = max(months_duration_for_policy(policy), 1)
-    window_days = max(1, getattr(settings_obj, "payment_window_days", 5) or 5)
-    display_offset = max(0, getattr(settings_obj, "client_expiration_offset_days", 0) or 0)
+    window_days = policy.get_effective_payment_window_days(settings_obj=settings_obj)
+    display_offset = policy.get_effective_client_expiration_offset_days(
+        settings_obj=settings_obj
+    )
 
     cycle: Optional[dict] = None
     for idx in range(months_to_generate):
@@ -383,7 +392,9 @@ def next_price_update_window(
     if not end_date:
         return None, None
 
-    adjustment_days = max(0, getattr(settings_obj, "policy_adjustment_window_days", 0) or 0)
+    adjustment_days = policy.get_effective_policy_adjustment_window_days(
+        settings_obj=settings_obj
+    )
     if adjustment_days < 0:  # seguridad extra
         adjustment_days = 0
 

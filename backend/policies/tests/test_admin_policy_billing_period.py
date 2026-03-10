@@ -4,6 +4,7 @@ from django.urls import reverse
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase, APIClient
 
+from common.models import AppSettings
 from products.models import Product
 from payments.models import BillingPeriod
 from policies.models import Policy, PolicyInstallment
@@ -72,6 +73,20 @@ class AdminPolicyBillingPeriodTests(APITestCase):
         policy_id = res.data.get("id")
         policy = Policy.objects.get(id=policy_id)
         self.assertEqual(PolicyInstallment.objects.filter(policy=policy).count(), 0)
+
+    def test_admin_create_uses_default_term_months_for_end_date(self):
+        settings_obj = AppSettings.get_solo()
+        settings_obj.default_term_months = 3
+        settings_obj.save(update_fields=["default_term_months"])
+
+        url = reverse("admin-policies-list")
+        res = self.client.post(url, self._payload(start_date="2026-01-01"), format="json")
+        self.assertEqual(res.status_code, 201)
+
+        policy = Policy.objects.get(id=res.data["id"])
+        self.assertEqual(policy.start_date.isoformat(), "2026-01-01")
+        self.assertEqual(policy.end_date.isoformat(), "2026-03-31")
+        self.assertEqual(policy.default_term_months_snapshot, 3)
 
     def test_admin_list_does_not_create_billing_periods(self):
         today = date.today()
