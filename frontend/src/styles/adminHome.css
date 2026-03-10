@@ -170,6 +170,18 @@
   border: 1px solid #f5c6cb;
 }
 
+.admin-inline-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #e6f4ea;
+  color: #1e4620;
+  border: 1px solid #b7dfc3;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
 /* =========================
    Preferences grid
    ========================= */

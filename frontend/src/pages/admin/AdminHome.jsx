@@ -81,18 +81,22 @@ export default function AdminHome() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsErr, setSettingsErr] = useState("");
   const [settingsMsg, setSettingsMsg] = useState("");
+  const [settingsSavedFlash, setSettingsSavedFlash] = useState(false);
 
   // ---- CONTACTO: AppSettings(contact_info) ----
   const [contact, setContact] = useState(CONTACT_FALLBACK);
   const [savingContact, setSavingContact] = useState(false);
   const [contactErr, setContactErr] = useState("");
   const [contactMsg, setContactMsg] = useState("");
+  const [contactSavedFlash, setContactSavedFlash] = useState(false);
 
   // ---- NOTIFICACIÓN: pólizas en período de ajuste ----
   const [adjustCount, setAdjustCount] = useState(null); // null = sin cargar
   const [loadingAdjustCount, setLoadingAdjustCount] = useState(false);
   const [unpaidCount, setUnpaidCount] = useState(null);
   const [loadingUnpaidCount, setLoadingUnpaidCount] = useState(false);
+  const settingsFlashTimer = useRef(null);
+  const contactFlashTimer = useRef(null);
 
   const form = useMemo(() => {
     const s = settings || {};
@@ -142,6 +146,13 @@ export default function AdminHome() {
       }
     })();
   }, [isAdmin]);
+
+  useEffect(() => {
+    return () => {
+      if (settingsFlashTimer.current) clearTimeout(settingsFlashTimer.current);
+      if (contactFlashTimer.current) clearTimeout(contactFlashTimer.current);
+    };
+  }, []);
 
   // Cargar contador de pólizas no abonadas al entrar al admin
   useEffect(() => {
@@ -270,6 +281,9 @@ export default function AdminHome() {
       const data = await adminSettingsApi.patch(payload);
       setSettings(data);
       setSettingsMsg("Preferencias actualizadas.");
+      setSettingsSavedFlash(true);
+      if (settingsFlashTimer.current) clearTimeout(settingsFlashTimer.current);
+      settingsFlashTimer.current = setTimeout(() => setSettingsSavedFlash(false), 2500);
     } catch (e) {
       setSettingsErr("No se pudieron guardar las preferencias.");
     } finally {
@@ -299,6 +313,9 @@ export default function AdminHome() {
       const { data } = await api.patch("/common/contact-info/", payload);
       setContact(normalizeContact(data));
       setContactMsg("Datos de contacto actualizados.");
+      setContactSavedFlash(true);
+      if (contactFlashTimer.current) clearTimeout(contactFlashTimer.current);
+      contactFlashTimer.current = setTimeout(() => setContactSavedFlash(false), 2500);
     } catch (e) {
       setContactErr("No se pudieron guardar los datos de contacto.");
     } finally {
@@ -627,8 +644,9 @@ export default function AdminHome() {
               onClick={onSaveSettings}
               disabled={!canSaveSettings}
             >
-              {savingSettings ? "Guardando…" : "Guardar preferencias"}
+              {savingSettings ? "Guardando…" : settingsSavedFlash ? "Guardado" : "Guardar preferencias"}
             </button>
+            {settingsSavedFlash ? <span className="admin-inline-status">Guardado</span> : null}
           </div>
         </div>
       ) : null}
@@ -746,8 +764,9 @@ export default function AdminHome() {
               onClick={onSaveContact}
               disabled={loadingSettings || savingContact}
             >
-              {savingContact ? "Guardando…" : "Guardar contacto"}
+              {savingContact ? "Guardando…" : contactSavedFlash ? "Guardado" : "Guardar contacto"}
             </button>
+            {contactSavedFlash ? <span className="admin-inline-status">Guardado</span> : null}
           </div>
         </div>
       ) : null}
