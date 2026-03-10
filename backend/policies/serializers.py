@@ -524,12 +524,13 @@ class PolicySerializer(serializers.ModelSerializer):
         if not vehicle_ref and not vehicle_data:
             return None
         source_vehicle = vehicle_ref or getattr(policy, "vehicle", None)
+        should_overwrite = bool(vehicle_data or vehicle_ref)
         try:
             ensure_policy_vehicle_snapshot(
                 policy,
                 source_vehicle=source_vehicle,
                 payload=vehicle_data,
-                overwrite=False,
+                overwrite=should_overwrite,
             )
         except DjangoValidationError as exc:
             detail = exc.message_dict if hasattr(exc, "message_dict") else {"vehicle": exc.messages}
