@@ -25,6 +25,7 @@ export default function QuoteRequest() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [shareUrl, setShareUrl] = useState("");
+  const [copyState, setCopyState] = useState("");
   const [contact, setContact] = useState(CONTACT_FALLBACK);
   const selectedPlanCode = String(searchParams.get("plan") || "").trim();
   const selectedPlanName = String(
@@ -127,6 +128,7 @@ export default function QuoteRequest() {
   const onSubmit = async (e) => {
     e.preventDefault();
     setErr("");
+    setCopyState("");
     setShareUrl("");
 
     if (!canSubmit) {
@@ -181,6 +183,16 @@ export default function QuoteRequest() {
       setErr(e?.message || "Error al enviar la cotización.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onCopyShareUrl = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopyState("Link copiado.");
+    } catch {
+      setCopyState("No se pudo copiar automáticamente.");
     }
   };
 
@@ -355,6 +367,30 @@ export default function QuoteRequest() {
           <button className="quote-submit" disabled={!canSubmit}>
             {busy ? "Enviando…" : "Enviar por WhatsApp"}
           </button>
+
+          {shareUrl ? (
+            <div className="quote-fallback">
+              <p className="fallback-title">
+                Si no podés enviarlo por WhatsApp, copiá este link y compartilo por el medio que prefieras.
+              </p>
+              <div className="fallback-box">
+                <input
+                  className="fallback-input"
+                  type="text"
+                  readOnly
+                  value={shareUrl}
+                />
+                <button
+                  type="button"
+                  className="fallback-copy"
+                  onClick={onCopyShareUrl}
+                >
+                  Copiar link
+                </button>
+              </div>
+              {copyState ? <p className="fallback-meta">{copyState}</p> : null}
+            </div>
+          ) : null}
         </form>
       </div>
     </div>
