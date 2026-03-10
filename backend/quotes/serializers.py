@@ -90,6 +90,7 @@ class QuoteShareCreateMultipartSerializer(serializers.Serializer):
     year = serializers.IntegerField()
     locality = serializers.CharField()
     garage = serializers.BooleanField()
+    is_zero_km = serializers.BooleanField(required=False, default=False)
     gnc = serializers.BooleanField()
     gnc_amount = serializers.DecimalField(
         max_digits=12, decimal_places=2, required=False, allow_null=True

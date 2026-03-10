@@ -554,6 +554,7 @@ export default function PolicyFormModal({ open, onClose, policy }) {
     setQuoteLoading(true);
     try {
       const data = await quotesApi.getShare(token);
+      setShowVehicleExtras(true);
       setVehicle((prev) => ({
         ...prev,
         make: data?.make || "",
@@ -596,11 +597,6 @@ export default function PolicyFormModal({ open, onClose, policy }) {
           {/* ✅ INFO EXTRA SOLO EN EDICIÓN */}
           {isEdit ? (
             <div className="table-card" style={{ padding: 12, marginBottom: 12 }}>
-              <div className="table-head" style={{ marginBottom: 10 }}>
-                <div className="table-title">Información extra</div>
-                <div className="table-muted">Datos calculados (solo lectura)</div>
-              </div>
-
               <div
                 style={{
                   display: "grid",

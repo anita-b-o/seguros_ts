@@ -45,6 +45,7 @@ export default function QuoteRequest() {
   const [year, setYear] = useState("");
   const [locality, setLocality] = useState("");
   const [garage, setGarage] = useState("");
+  const [zeroKm, setZeroKm] = useState("");
   const [gnc, setGnc] = useState("");
   const [gncAmount, setGncAmount] = useState("");
 
@@ -73,6 +74,7 @@ export default function QuoteRequest() {
     year &&
     locality &&
     (garage === "yes" || garage === "no") &&
+    (zeroKm === "yes" || zeroKm === "no") &&
     (gnc === "yes" || gnc === "no") &&
     (gnc !== "yes" || gncAmount) &&
     photoFront &&
@@ -149,6 +151,7 @@ export default function QuoteRequest() {
       fd.append("year", year);
       fd.append("locality", locality);
       fd.append("garage", garage === "yes");
+      fd.append("is_zero_km", zeroKm === "yes");
       fd.append("gnc", gnc === "yes");
       if (gnc === "yes") fd.append("gnc_amount", gncAmount);
 
@@ -311,7 +314,7 @@ export default function QuoteRequest() {
             </label>
           </div>
 
-          {/* Garage / Uso / GNC */}
+          {/* Garage / Uso / 0km / GNC */}
           <div className="grid2">
             <SelectReq
               label="¿Lo guarda en garaje?"
@@ -328,6 +331,12 @@ export default function QuoteRequest() {
                 ["privado", "Privado"],
                 ["comercial", "Comercial"],
               ]}
+            />
+            <SelectReq
+              label="¿Es 0 km?"
+              value={zeroKm}
+              onChange={setZeroKm}
+              disabled={busy}
             />
             <SelectReq
               label="¿Es a GNC?"

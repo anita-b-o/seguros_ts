@@ -96,7 +96,7 @@ class QuoteShareCreateView(PublicEndpointMixin, APIView):
                 year=data["year"],
                 city=data["locality"],
                 has_garage=data["garage"],
-                is_zero_km=False,
+                is_zero_km=data.get("is_zero_km", False),
                 usage=data["usage"],
                 has_gnc=data["gnc"],
                 gnc_amount=data.get("gnc_amount"),
