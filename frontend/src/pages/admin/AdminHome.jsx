@@ -525,7 +525,7 @@ export default function AdminHome() {
 
             {passErr ? <div className="admin-alert">{passErr}</div> : null}
             {passMsg ? (
-              <div className="admin-alert" style={{ opacity: 0.9 }}>
+              <div className="admin-alert success" style={{ opacity: 0.9 }}>
                 {passMsg}
               </div>
             ) : null}
@@ -556,7 +556,7 @@ export default function AdminHome() {
 
           {settingsErr ? <div className="admin-alert">{settingsErr}</div> : null}
           {settingsMsg ? (
-            <div className="admin-alert" style={{ opacity: 0.9 }}>
+            <div className="admin-alert success" style={{ opacity: 0.9 }}>
               {settingsMsg}
             </div>
           ) : null}
@@ -645,7 +645,7 @@ export default function AdminHome() {
 
           {contactErr ? <div className="admin-alert">{contactErr}</div> : null}
           {contactMsg ? (
-            <div className="admin-alert" style={{ opacity: 0.9 }}>
+            <div className="admin-alert success" style={{ opacity: 0.9 }}>
               {contactMsg}
             </div>
           ) : null}
